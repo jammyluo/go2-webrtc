@@ -25,6 +25,7 @@ import (
 const (
 	ValidationType = "validation"
 	MessageType    = "msg"
+	HeartbeatType  = "heartbeat"
 )
 
 // 机器人命令映射
@@ -77,6 +78,7 @@ type Go2Connection struct {
 	onValidated      func()
 	onMessage        func(message interface{}, msgObj interface{})
 	onOpen           func()
+	heartbeatTimer   *time.Timer
 }
 
 // Message 消息结构体
@@ -132,9 +134,16 @@ func NewGo2Connection(ip, token string, onValidated func(), onMessage func(messa
 	// 设置数据通道事件处理
 	dataChannel.OnOpen(func() {
 		log.Println("数据通道已打开")
+		// 在数据通道打开后立即启动心跳
+		conn.startHeartbeat()
 		if conn.onOpen != nil {
 			conn.onOpen()
 		}
+	})
+
+	dataChannel.OnClose(func() {
+		log.Println("数据通道已关闭")
+		conn.stopHeartbeat()
 	})
 
 	dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
@@ -158,6 +167,26 @@ func (conn *Go2Connection) handleDataChannelMessage(msg webrtc.DataChannelMessag
 			return
 		}
 
+		// 检查是否是错误消息
+		if messageObj.Type == "err" || messageObj.Type == "errors" {
+			log.Printf("收到错误消息: %v", messageObj.Data)
+			// 处理验证相关的错误
+			if errData, ok := messageObj.Data.(map[string]interface{}); ok {
+				if info, exists := errData["info"]; exists && info == "Validation Needed." {
+					log.Println("收到验证需要错误，重新发送验证数据")
+					// 重新发送验证数据
+					if conn.validationResult != "SUCCESS" {
+						// 这里需要保存之前的key，暂时跳过
+						log.Println("需要重新发送验证数据，但缺少key")
+					}
+				}
+			} else {
+				// 如果Data为nil，记录完整的错误消息
+				log.Printf("错误消息Data为nil，完整消息: %+v", messageObj)
+			}
+			return
+		}
+
 		if messageObj.Type == ValidationType {
 			conn.validate(messageObj)
 		}
@@ -166,25 +195,40 @@ func (conn *Go2Connection) handleDataChannelMessage(msg webrtc.DataChannelMessag
 			conn.onMessage(string(msg.Data), messageObj)
 		}
 	} else {
-		// 处理二进制数据
-		conn.handleArrayBuffer(msg.Data)
+		// 机器人不支持二进制数据，记录警告
+		log.Printf("收到二进制数据，但机器人不支持二进制数据格式")
 	}
 }
 
 // validate 验证处理
 func (conn *Go2Connection) validate(message Message) {
+	log.Printf("验证消息: %v", message)
+	log.Printf("验证消息类型: %T", message.Data)
+	log.Printf("验证消息数据: %v", message.Data)
+
 	if data, ok := message.Data.(string); ok && data == "Validation Ok." {
 		conn.validationResult = "SUCCESS"
+		log.Println("验证成功，启动心跳")
+		// 验证成功后启动心跳
+		conn.startHeartbeat()
 		if conn.onValidated != nil {
 			conn.onValidated()
 		}
 	} else {
 		// 发送加密的验证数据
 		if data, ok := message.Data.(string); ok {
-			encryptedData := conn.encryptKey(data)
-			conn.publish("", encryptedData, ValidationType)
+			log.Printf("发送加密验证数据，原始数据: %s", data)
+			conn.sendValidationData(data)
+		} else {
+			log.Printf("验证消息数据不是字符串类型: %T", message.Data)
 		}
 	}
+}
+
+// sendValidationData 发送验证数据
+func (conn *Go2Connection) sendValidationData(key string) {
+	encryptedData := conn.encryptKey(key)
+	conn.publish("", encryptedData, ValidationType)
 }
 
 // publish 发布消息
@@ -210,37 +254,6 @@ func (conn *Go2Connection) publish(topic string, data interface{}, msgType strin
 	conn.dataChannel.Send(jsonData)
 }
 
-// handleArrayBuffer 处理数组缓冲区数据
-func (conn *Go2Connection) handleArrayBuffer(data []byte) {
-	if len(data) < 6 {
-		return
-	}
-
-	// 解析长度（前2字节）
-	length := int(data[0]) | int(data[1])<<8
-
-	if len(data) < 4+length {
-		return
-	}
-
-	// 提取JSON段
-	jsonSegment := data[4 : 4+length]
-	// remainingData := data[4+length:] // 可以用于Lidar解码
-
-	var obj map[string]interface{}
-	if err := json.Unmarshal(jsonSegment, &obj); err != nil {
-		log.Printf("解析JSON失败: %v", err)
-		return
-	}
-
-	// 这里可以添加Lidar解码逻辑
-	// obj["data"]["data"] = decodedData
-
-	if conn.onMessage != nil {
-		conn.onMessage(data, obj)
-	}
-}
-
 // encryptKey 加密密钥
 func (conn *Go2Connection) encryptKey(key string) string {
 	prefixedKey := "UnitreeGo2_" + key
@@ -248,7 +261,7 @@ func (conn *Go2Connection) encryptKey(key string) string {
 	return hexToBase64(encrypted)
 }
 
-// encryptByMD5 MD5加密
+// encryptByMD5 MD5加密 utf-8
 func encryptByMD5(input string) string {
 	hash := md5.Sum([]byte(input))
 	return hex.EncodeToString(hash[:])
@@ -580,20 +593,60 @@ func (conn *Go2Connection) ConnectRobot() error {
 	return nil
 }
 
+func generate_id() int {
+	return int(
+		time.Now().UnixMilli() % 2147483648,
+	)
+}
+
+// {"type": "msg", "topic": "rt/api/sport/request", "data": {"header": {"identity": {"id": 1626023453, "api_id": 1005}}, "parameter": "1005"}}
+// {"type": "msg", "topic": "rt/api/sport/request"," data": {"header": {"identity": {"api_id": 1004, "id": 1626306583}}, "parameter": "1004"}}
 // SendCommand 发送机器人命令
 func (conn *Go2Connection) SendCommand(command string, data interface{}) {
 	if cmdID, exists := SportCmd[command]; exists {
 		conn.publish("rt/api/sport/request", map[string]interface{}{
-			"cmd":  cmdID,
-			"data": data,
+			"header":    map[string]interface{}{"identity": map[string]interface{}{"id": generate_id(), "api_id": cmdID}},
+			"parameter": strconv.Itoa(cmdID),
 		}, MessageType)
 	} else {
 		log.Printf("未知命令: %s", command)
 	}
 }
 
+// startHeartbeat 启动心跳
+func (conn *Go2Connection) startHeartbeat() {
+	log.Println("启动心跳机制")
+	// conn.sendHeartbeat()
+}
+
+// sendHeartbeat 发送心跳
+func (conn *Go2Connection) sendHeartbeat() {
+	if conn.dataChannel != nil && conn.dataChannel.ReadyState() == webrtc.DataChannelStateOpen {
+		currentTime := time.Now()
+		data := map[string]interface{}{
+			"timeInStr": currentTime.Format("2006-01-02 15:04:05"),
+			"timeInNum": int(currentTime.Unix()),
+		}
+		conn.publish("", data, HeartbeatType)
+	}
+
+	// 2秒后发送下一次心跳
+	conn.heartbeatTimer = time.AfterFunc(2*time.Second, conn.sendHeartbeat)
+}
+
+// stopHeartbeat 停止心跳
+func (conn *Go2Connection) stopHeartbeat() {
+	if conn.heartbeatTimer != nil {
+		conn.heartbeatTimer.Stop()
+		conn.heartbeatTimer = nil
+	}
+}
+
 // Close 关闭连接
 func (conn *Go2Connection) Close() error {
+	// 停止心跳
+	conn.stopHeartbeat()
+
 	if conn.peerConnection != nil {
 		return conn.peerConnection.Close()
 	}
@@ -605,12 +658,12 @@ func main() {
 	// 创建连接
 	conn := NewGo2Connection(
 		"192.168.123.161", // 机器人IP
-		"your_token_here", // 机器人令牌
+		"",                // 机器人令牌
 		func() {
 			log.Println("验证成功")
 		},
 		func(message interface{}, msgObj interface{}) {
-			log.Printf("收到消息: %v", msgObj)
+			log.Printf("收到消息: %v", message)
 		},
 		func() {
 			log.Println("连接已打开")
@@ -627,8 +680,10 @@ func main() {
 	time.Sleep(2 * time.Second)
 
 	// 发送命令示例
-	conn.SendCommand("Hello", nil)
-	conn.SendCommand("StandUp", nil)
+	// conn.SendCommand("Hello", nil)
+	// conn.SendCommand("StandDown", nil)
+	// time.Sleep(5 * time.Second)
+	// conn.SendCommand("StandUp", nil)
 
 	// 保持连接一段时间
 	time.Sleep(10 * time.Second)
