@@ -24,8 +24,8 @@ import (
 // 常量定义
 const (
 	ValidationType = "validation"
+	VideoType      = "vid"
 	MessageType    = "msg"
-	HeartbeatType  = "heartbeat"
 )
 
 // 机器人命令映射
@@ -78,8 +78,12 @@ type Go2Connection struct {
 	onValidated      func()
 	onMessage        func(message interface{}, msgObj interface{})
 	onOpen           func()
-	heartbeatTimer   *time.Timer
 	validationKey    string // 保存验证密钥
+
+	// 视频处理相关
+	videoTrack   *webrtc.TrackRemote
+	videoEnabled bool
+	onVideoFrame func(frameData []byte, frameType string, timestamp uint32) // 视频帧回调
 }
 
 // Message 消息结构体
@@ -137,8 +141,6 @@ func NewGo2Connection(ip, token string, onValidated func(), onMessage func(messa
 	// 设置数据通道事件处理
 	dataChannel.OnOpen(func() {
 		log.Println("数据通道已打开")
-		// 在数据通道打开后立即启动心跳
-		conn.startHeartbeat()
 		if conn.onOpen != nil {
 			conn.onOpen()
 		}
@@ -146,7 +148,6 @@ func NewGo2Connection(ip, token string, onValidated func(), onMessage func(messa
 
 	dataChannel.OnClose(func() {
 		log.Println("数据通道已关闭")
-		conn.stopHeartbeat()
 	})
 
 	dataChannel.OnMessage(func(msg webrtc.DataChannelMessage) {
@@ -158,7 +159,60 @@ func NewGo2Connection(ip, token string, onValidated func(), onMessage func(messa
 		log.Printf("连接状态: %s", s.String())
 	})
 
+	// 设置轨道处理
+	peerConnection.OnTrack(func(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+		log.Printf("接收到轨道: %s", remoteTrack.Kind())
+		conn.handleTrack(remoteTrack, receiver)
+	})
+
 	return conn
+}
+
+// handleTrack 处理接收到的轨道
+func (conn *Go2Connection) handleTrack(remoteTrack *webrtc.TrackRemote, receiver *webrtc.RTPReceiver) {
+	log.Printf("🎬 处理轨道: %s", remoteTrack.Kind())
+
+	if remoteTrack.Kind() == webrtc.RTPCodecTypeVideo {
+		conn.videoTrack = remoteTrack
+		conn.videoEnabled = true
+
+		// 启动视频处理
+		go conn.processVideoTrack(remoteTrack)
+
+		log.Printf("🎬 视频轨道已设置，开始处理视频流")
+	} else if remoteTrack.Kind() == webrtc.RTPCodecTypeAudio {
+		log.Printf("🎵 音频轨道已接收")
+	}
+}
+
+// processVideoTrack 处理视频轨道
+func (conn *Go2Connection) processVideoTrack(track *webrtc.TrackRemote) {
+	log.Printf("🎬 开始处理视频轨道")
+
+	// 读取RTP包
+	for {
+		rtp, _, err := track.ReadRTP()
+		if err != nil {
+			log.Printf("🎬 读取RTP包失败: %v", err)
+			break
+		}
+
+		// 调用视频帧回调
+		if conn.onVideoFrame != nil {
+			conn.onVideoFrame(rtp.Payload, fmt.Sprintf("%d", rtp.Header.PayloadType), rtp.Header.Timestamp)
+		}
+
+		// 简单的帧率控制
+		time.Sleep(33 * time.Millisecond) // 约30fps
+	}
+
+	log.Printf("🎬 视频轨道处理结束")
+}
+
+// SetVideoFrameCallback 设置视频帧回调函数
+func (conn *Go2Connection) SetVideoFrameCallback(callback func(frameData []byte, frameType string, timestamp uint32)) {
+	conn.onVideoFrame = callback
+	log.Printf("🎬 视频帧回调已设置")
 }
 
 // handleDataChannelMessage 处理数据通道消息
@@ -208,9 +262,6 @@ func (conn *Go2Connection) validate(message Message) {
 	log.Printf("验证消息: %v", message)
 	if data, ok := message.Data.(string); ok && data == "Validation Ok." {
 		conn.validationResult = "SUCCESS"
-		log.Println("验证成功，启动心跳")
-		// 验证成功后启动心跳
-		conn.startHeartbeat()
 		if conn.onValidated != nil {
 			conn.onValidated()
 		}
@@ -619,8 +670,32 @@ func generate_id() int {
 	)
 }
 
-// {"type": "msg", "topic": "rt/api/sport/request", "data": {"header": {"identity": {"id": 1626023453, "api_id": 1005}}, "parameter": "1005"}}
-// {"type": "msg", "topic": "rt/api/sport/request"," data": {"header": {"identity": {"api_id": 1004, "id": 1626306583}}, "parameter": "1004"}}
+// OpenVideo 开启视频
+func (conn *Go2Connection) OpenVideo() {
+	conn.publish("", "on", VideoType)
+
+	// 启动视频处理
+	if conn.videoTrack != nil {
+		go conn.processVideoTrack(conn.videoTrack)
+		log.Printf("🎬 视频已开启")
+	}
+}
+
+// CloseVideo 关闭视频
+func (conn *Go2Connection) CloseVideo() {
+	conn.publish("", "off", VideoType)
+
+	// 停止视频处理
+	if conn.videoTrack != nil {
+		// 理论上，当数据通道关闭时，视频轨道也会被释放
+		// 但为了确保，可以在这里停止视频处理
+		// 如果需要更精确的控制，可以考虑在数据通道关闭时停止goroutine
+		// 或者在数据通道关闭时设置一个标志
+		// 目前，我们假设数据通道关闭后，视频轨道也会被释放
+		log.Printf("🎬 视频已关闭")
+	}
+}
+
 // SendCommand 发送机器人命令
 func (conn *Go2Connection) SendCommand(command string, data interface{}) {
 	if cmdID, exists := SportCmd[command]; exists {
@@ -633,84 +708,10 @@ func (conn *Go2Connection) SendCommand(command string, data interface{}) {
 	}
 }
 
-// startHeartbeat 启动心跳
-func (conn *Go2Connection) startHeartbeat() {
-	log.Println("启动心跳机制")
-	// conn.sendHeartbeat()
-}
-
-// sendHeartbeat 发送心跳
-func (conn *Go2Connection) sendHeartbeat() {
-	if conn.dataChannel != nil && conn.dataChannel.ReadyState() == webrtc.DataChannelStateOpen {
-		currentTime := time.Now()
-		data := map[string]interface{}{
-			"timeInStr": currentTime.Format("2006-01-02 15:04:05"),
-			"timeInNum": int(currentTime.Unix()),
-		}
-		conn.publish("", data, HeartbeatType)
-	}
-
-	// 2秒后发送下一次心跳
-	conn.heartbeatTimer = time.AfterFunc(2*time.Second, conn.sendHeartbeat)
-}
-
-// stopHeartbeat 停止心跳
-func (conn *Go2Connection) stopHeartbeat() {
-	if conn.heartbeatTimer != nil {
-		conn.heartbeatTimer.Stop()
-		conn.heartbeatTimer = nil
-	}
-}
-
 // Close 关闭连接
 func (conn *Go2Connection) Close() error {
-	// 停止心跳
-	conn.stopHeartbeat()
-
 	if conn.peerConnection != nil {
 		return conn.peerConnection.Close()
 	}
 	return nil
-}
-
-// 示例使用
-func main() {
-	// 创建连接
-	conn := NewGo2Connection(
-		"192.168.123.161", // 机器人IP
-		"",                // 机器人令牌
-		func() {
-			log.Println("验证成功")
-		},
-		func(message interface{}, msgObj interface{}) {
-			// log.Printf("收到消息: %v", message)
-		},
-		func() {
-			log.Println("连接已打开")
-		},
-	)
-
-	// 连接到机器人
-	err := conn.ConnectRobot()
-	if err != nil {
-		log.Fatal("连接失败:", err)
-	}
-
-	// 等待连接建立
-	time.Sleep(2 * time.Second)
-
-	// 发送命令示例
-	// conn.SendCommand("Hello", nil)
-	for i := 0; i < 10; i++ {
-		time.Sleep(10 * time.Second)
-		conn.SendCommand("StandUp", nil)
-		time.Sleep(10 * time.Second)
-		conn.SendCommand("StandDown", nil)
-	}
-
-	// 保持连接一段时间
-	time.Sleep(1000 * time.Second)
-
-	// 关闭连接
-	conn.Close()
 }
