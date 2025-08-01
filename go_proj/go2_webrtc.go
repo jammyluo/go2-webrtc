@@ -79,6 +79,7 @@ type Go2Connection struct {
 	onMessage        func(message interface{}, msgObj interface{})
 	onOpen           func()
 	heartbeatTimer   *time.Timer
+	validationKey    string // 保存验证密钥
 }
 
 // Message 消息结构体
@@ -99,11 +100,11 @@ type SDPOffer struct {
 // NewGo2Connection 创建新的Go2连接
 func NewGo2Connection(ip, token string, onValidated func(), onMessage func(message interface{}, msgObj interface{}), onOpen func()) *Go2Connection {
 	config := webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{
-				URLs: []string{"stun:stun.l.google.com:19302"},
-			},
-		},
+		// ICEServers: []webrtc.ICEServer{
+		// 	{
+		// 		URLs: []string{"stun:stun.l.google.com:19302"},
+		// 	},
+		// },
 	}
 
 	peerConnection, err := webrtc.NewPeerConnection(config)
@@ -122,9 +123,11 @@ func NewGo2Connection(ip, token string, onValidated func(), onMessage func(messa
 	}
 
 	// 创建数据通道
-	dataChannel, err := peerConnection.CreateDataChannel("data", &webrtc.DataChannelInit{
-		ID: func() *uint16 { id := uint16(2); return &id }(),
-	})
+	dataChannelInit := webrtc.DataChannelInit{
+		ID:         func() *uint16 { id := uint16(1); return &id }(),
+		Negotiated: func() *bool { negotiated := false; return &negotiated }(),
+	}
+	dataChannel, err := peerConnection.CreateDataChannel("data", &dataChannelInit)
 	if err != nil {
 		log.Fatal("创建数据通道失败:", err)
 	}
@@ -166,6 +169,7 @@ func (conn *Go2Connection) handleDataChannelMessage(msg webrtc.DataChannelMessag
 			log.Printf("解析消息失败: %v", err)
 			return
 		}
+		log.Printf("handleDataChannelMessage: %v", messageObj)
 
 		// 检查是否是错误消息
 		if messageObj.Type == "err" || messageObj.Type == "errors" {
@@ -175,9 +179,8 @@ func (conn *Go2Connection) handleDataChannelMessage(msg webrtc.DataChannelMessag
 				if info, exists := errData["info"]; exists && info == "Validation Needed." {
 					log.Println("收到验证需要错误，重新发送验证数据")
 					// 重新发送验证数据
-					if conn.validationResult != "SUCCESS" {
-						// 这里需要保存之前的key，暂时跳过
-						log.Println("需要重新发送验证数据，但缺少key")
+					if conn.validationResult != "SUCCESS" && conn.validationKey != "" {
+						conn.sendValidationData(conn.validationKey)
 					}
 				}
 			} else {
@@ -203,9 +206,6 @@ func (conn *Go2Connection) handleDataChannelMessage(msg webrtc.DataChannelMessag
 // validate 验证处理
 func (conn *Go2Connection) validate(message Message) {
 	log.Printf("验证消息: %v", message)
-	log.Printf("验证消息类型: %T", message.Data)
-	log.Printf("验证消息数据: %v", message.Data)
-
 	if data, ok := message.Data.(string); ok && data == "Validation Ok." {
 		conn.validationResult = "SUCCESS"
 		log.Println("验证成功，启动心跳")
@@ -217,7 +217,7 @@ func (conn *Go2Connection) validate(message Message) {
 	} else {
 		// 发送加密的验证数据
 		if data, ok := message.Data.(string); ok {
-			log.Printf("发送加密验证数据，原始数据: %s", data)
+			conn.validationKey = data // 保存验证密钥
 			conn.sendValidationData(data)
 		} else {
 			log.Printf("验证消息数据不是字符串类型: %T", message.Data)
@@ -234,7 +234,7 @@ func (conn *Go2Connection) sendValidationData(key string) {
 // publish 发布消息
 func (conn *Go2Connection) publish(topic string, data interface{}, msgType string) {
 	if conn.dataChannel == nil || conn.dataChannel.ReadyState() != webrtc.DataChannelStateOpen {
-		log.Println("数据通道未打开")
+		log.Printf("数据通道未打开，无法发送消息")
 		return
 	}
 
@@ -250,8 +250,15 @@ func (conn *Go2Connection) publish(topic string, data interface{}, msgType strin
 		return
 	}
 
-	log.Printf("发送消息: %s", string(jsonData))
-	conn.dataChannel.Send(jsonData)
+	// 记录原始payload，与Python版本保持一致
+	log.Printf("-> Sending message %s", string(jsonData))
+
+	// 发送消息
+	err = conn.dataChannel.SendText(string(jsonData))
+	if err != nil {
+		log.Printf("发送消息失败: %v", err)
+		return
+	}
 }
 
 // encryptKey 加密密钥
@@ -451,12 +458,12 @@ func makeLocalRequest(path string, body io.Reader, headers map[string]string) (*
 }
 
 // getPeerAnswer 获取对等方应答
-func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription) (map[string]interface{}, error) {
+func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription, ip, token string) (map[string]interface{}, error) {
 	sdpOfferJSON := SDPOffer{
 		ID:    "STA_localNetwork",
 		SDP:   sdpOffer.SDP,
 		Type:  sdpOffer.Type.String(),
-		Token: conn.token,
+		Token: token,
 	}
 
 	newSDP, err := json.Marshal(sdpOfferJSON)
@@ -464,7 +471,7 @@ func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription) (m
 		return nil, err
 	}
 
-	url := fmt.Sprintf("http://%s:9991/con_notify", conn.ip)
+	url := fmt.Sprintf("http://%s:9991/con_notify", ip)
 	resp, err := makeLocalRequest(url, nil, nil)
 	if err != nil {
 		return nil, err
@@ -490,6 +497,10 @@ func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription) (m
 	if err := json.Unmarshal(decodedResponse, &decodedJSON); err != nil {
 		return nil, err
 	}
+
+	log.Printf("getPeerAnswer I newSDP: %s", string(newSDP))
+	log.Printf("getPeerAnswer I url: %s", url)
+	log.Printf("getPeerAnswer I resp: %s", decodedJSON)
 
 	data1, ok := decodedJSON["data1"].(string)
 	if !ok {
@@ -521,13 +532,14 @@ func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription) (m
 	}
 
 	// 第二个请求的URL
-	url2 := fmt.Sprintf("http://%s:9991/con_ing_%s", conn.ip, pathEnding)
+	url2 := fmt.Sprintf("http://%s:9991/con_ing_%s", ip, pathEnding)
 
 	headers := map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
 	}
 
-	resp, err = makeLocalRequest(url2, bytes.NewReader(bodyJSON), headers)
+	// 使用字符串形式的body，与Python版本一致
+	resp, err = makeLocalRequest(url2, strings.NewReader(string(bodyJSON)), headers)
 	if err != nil {
 		return nil, err
 	}
@@ -550,6 +562,11 @@ func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription) (m
 		return nil, err
 	}
 
+	log.Printf("getPeerAnswer II url2: %s", url2)
+	log.Printf("getPeerAnswer II headers: %s", headers)
+	log.Printf("getPeerAnswer II resp.body: %s", string(decryptedResponse))
+	log.Printf("getPeerAnswer II peerAnswer: %s", peerAnswer)
+
 	return peerAnswer, nil
 }
 
@@ -567,8 +584,11 @@ func (conn *Go2Connection) ConnectRobot() error {
 		return fmt.Errorf("设置本地描述失败: %v", err)
 	}
 
+	sdp_offer := conn.peerConnection.LocalDescription()
+	log.Printf("ConnectRobot I sdp_offer: %v", sdp_offer)
+
 	// 获取对等方应答
-	peerAnswer, err := conn.getPeerAnswer(&offer)
+	peerAnswer, err := conn.getPeerAnswer(sdp_offer, conn.ip, conn.token)
 	if err != nil {
 		return fmt.Errorf("获取对等方应答失败: %v", err)
 	}
@@ -663,7 +683,7 @@ func main() {
 			log.Println("验证成功")
 		},
 		func(message interface{}, msgObj interface{}) {
-			log.Printf("收到消息: %v", message)
+			// log.Printf("收到消息: %v", message)
 		},
 		func() {
 			log.Println("连接已打开")
@@ -681,12 +701,15 @@ func main() {
 
 	// 发送命令示例
 	// conn.SendCommand("Hello", nil)
-	// conn.SendCommand("StandDown", nil)
-	// time.Sleep(5 * time.Second)
-	// conn.SendCommand("StandUp", nil)
+	for i := 0; i < 10; i++ {
+		time.Sleep(10 * time.Second)
+		conn.SendCommand("StandUp", nil)
+		time.Sleep(10 * time.Second)
+		conn.SendCommand("StandDown", nil)
+	}
 
 	// 保持连接一段时间
-	time.Sleep(10 * time.Second)
+	time.Sleep(1000 * time.Second)
 
 	// 关闭连接
 	conn.Close()
