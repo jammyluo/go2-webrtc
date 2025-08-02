@@ -197,9 +197,24 @@ func (conn *Go2Connection) processVideoTrack(track *webrtc.TrackRemote) {
 			break
 		}
 
-		// 调用视频帧回调
+		// 调用视频帧回调，传递完整的RTP信息
 		if conn.onVideoFrame != nil {
-			conn.onVideoFrame(rtp.Payload, fmt.Sprintf("%d", rtp.Header.PayloadType), rtp.Header.Timestamp)
+			// 创建包含完整RTP信息的视频帧数据
+			frameInfo := map[string]interface{}{
+				"payload":      rtp.Payload,
+				"payload_type": rtp.Header.PayloadType,
+				"timestamp":    rtp.Header.Timestamp,
+				"sequence":     rtp.Header.SequenceNumber,
+				"ssrc":         rtp.Header.SSRC,
+				"marker":       rtp.Header.Marker,
+				"csrc":         rtp.Header.CSRC,
+				"extension":    rtp.Header.Extension,
+				"extension_id": rtp.Header.ExtensionProfile,
+			}
+
+			// 将frameInfo序列化为JSON字符串作为frameType
+			frameTypeJSON, _ := json.Marshal(frameInfo)
+			conn.onVideoFrame(rtp.Payload, string(frameTypeJSON), rtp.Header.Timestamp)
 		}
 
 		// 简单的帧率控制
