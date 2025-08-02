@@ -14,6 +14,8 @@ deps:
 build: deps
 	go build -o webrtc-proxy webrtc_proxy.go go2_webrtc.go
 
+arm:
+	GOOS=linux GOARCH=arm64 go build -o webrtc-proxy-arm64 webrtc_proxy.go go2_webrtc.go
 # 运行代理服务器
 run: build
 	./webrtc-proxy
