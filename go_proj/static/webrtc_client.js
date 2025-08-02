@@ -157,25 +157,16 @@ class Go2WebRTCClient {
         
         this.log(`WebRTC客户端ID: ${this.clientID}`, 'info');
 
-        // 创建RTCPeerConnection
+        // 创建RTCPeerConnection - 本地局域网环境
         this.peerConnection = new RTCPeerConnection({
-            iceServers: [
-                {
-                    urls: [
-                        'stun:stun.l.google.com:19302',
-                        'stun:stun1.l.google.com:19302',
-                        'stun:stun2.l.google.com:19302',
-                        'stun:stun3.l.google.com:19302',
-                        'stun:stun4.l.google.com:19302'
-                    ]
-                }
-            ],
+            // 本地局域网环境，不需要STUN服务器
+            iceServers: [],
             iceTransportPolicy: 'all',
             bundlePolicy: 'max-bundle',
             rtcpMuxPolicy: 'require'
         });
 
-        this.log('RTCPeerConnection创建成功', 'info');
+        this.log('RTCPeerConnection创建成功（本地模式）', 'info');
 
         // 设置事件处理
         this.peerConnection.ontrack = (event) => {
@@ -194,9 +185,11 @@ class Go2WebRTCClient {
 
         this.peerConnection.oniceconnectionstatechange = () => {
             this.log(`ICE连接状态: ${this.peerConnection.iceConnectionState}`, 'info');
+            // 本地网络环境，ICE状态可能不同
             if (this.peerConnection.iceConnectionState === 'failed') {
-                this.log('ICE连接失败，尝试重新协商...', 'warning');
-                this.reconnectWebRTC();
+                this.log('ICE连接失败，但继续处理视频流（本地网络）', 'warning');
+            } else if (this.peerConnection.iceConnectionState === 'connected') {
+                this.log('ICE连接成功', 'success');
             }
         };
 

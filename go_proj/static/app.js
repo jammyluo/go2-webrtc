@@ -6,6 +6,10 @@ class Go2RobotController {
         this.robotIP = '';
         this.token = '';
         
+        // 视频处理相关
+        this.mediaSource = null;
+        this.sourceBuffer = null;
+        
         this.initElements();
         this.initEventListeners();
         this.loadSavedValues();
@@ -131,6 +135,7 @@ class Go2RobotController {
         this.resetConnectionUI();
         this.hideVideo();
         this.log('已断开与机器人的连接', 'info');
+        this.cleanupVideoResources(); // 清理视频资源
     }
 
     handleWebSocketMessage(response) {
@@ -171,8 +176,209 @@ class Go2RobotController {
 
     handleVideoFrame(videoFrame) {
         // 处理视频帧数据
-        // 这里可以根据需要处理视频帧
-        this.log(`收到视频帧: 类型=${videoFrame.frame_type}, 时间戳=${videoFrame.timestamp}, 大小=${videoFrame.frame_data.length}字节`, 'info');
+        try {
+            // 解析frame_type中的RTP信息
+            let rtpInfo = {};
+            if (videoFrame.frame_type && videoFrame.frame_type.startsWith('{')) {
+                try {
+                    rtpInfo = JSON.parse(videoFrame.frame_type);
+                } catch (e) {
+                    this.log(`解析RTP信息失败: ${e.message}`, 'error');
+                }
+            }
+
+            // 记录详细的视频帧信息
+            this.log(`收到视频帧: 大小=${videoFrame.frame_size}字节, 时间戳=${videoFrame.timestamp}`, 'info');
+            
+            if (Object.keys(rtpInfo).length > 0) {
+                this.log(`RTP信息: 序列号=${rtpInfo.sequence}, SSRC=${rtpInfo.ssrc}, 负载类型=${rtpInfo.payload_type}, 标记=${rtpInfo.marker}`, 'info');
+            }
+
+            // 尝试解码和显示视频
+            this.processVideoData(videoFrame.frame_data, rtpInfo);
+            
+        } catch (error) {
+            this.log(`处理视频帧失败: ${error.message}`, 'error');
+        }
+    }
+
+    processVideoData(base64Data, rtpInfo) {
+        try {
+            // 解码base64数据
+            const binaryData = atob(base64Data);
+            const bytes = new Uint8Array(binaryData.length);
+            for (let i = 0; i < binaryData.length; i++) {
+                bytes[i] = binaryData.charCodeAt(i);
+            }
+
+            // 根据负载类型处理不同的视频编码
+            const payloadType = rtpInfo.payload_type || 96; // 默认H.264
+            
+            if (payloadType === 96 || payloadType === 97) {
+                // H.264编码
+                this.processH264Video(bytes, rtpInfo);
+            } else if (payloadType === 98 || payloadType === 99) {
+                // VP8/VP9编码
+                this.processVP8Video(bytes, rtpInfo);
+            } else {
+                // 其他编码格式
+                this.log(`不支持的视频编码格式: ${payloadType}`, 'warning');
+                // 尝试通用处理
+                this.processGenericVideo(bytes, rtpInfo);
+            }
+
+        } catch (error) {
+            this.log(`解码视频数据失败: ${error.message}`, 'error');
+        }
+    }
+
+    processH264Video(bytes, rtpInfo) {
+        // 检查是否是关键帧
+        const isKeyFrame = rtpInfo.marker || this.isH264KeyFrame(bytes);
+        
+        if (isKeyFrame) {
+            this.log('检测到H.264关键帧', 'success');
+        }
+
+        // 使用MediaSource API处理实时视频流
+        this.processVideoWithMediaSource(bytes, 'video/mp4; codecs="avc1.42E01E"', rtpInfo);
+    }
+
+    processVP8Video(bytes, rtpInfo) {
+        // VP8视频处理
+        this.processVideoWithMediaSource(bytes, 'video/webm; codecs="vp8"', rtpInfo);
+    }
+
+    processGenericVideo(bytes, rtpInfo) {
+        // 通用视频处理
+        this.processVideoWithMediaSource(bytes, 'video/mp4', rtpInfo);
+    }
+
+    processVideoWithMediaSource(bytes, mimeType, rtpInfo) {
+        try {
+            // 检查是否支持MediaSource
+            if (!window.MediaSource) {
+                this.log('浏览器不支持MediaSource API，使用备用方案', 'warning');
+                this.processVideoWithBlob(bytes, mimeType);
+                return;
+            }
+
+            // 获取或创建MediaSource
+            if (!this.mediaSource) {
+                this.mediaSource = new MediaSource();
+                this.mediaSource.addEventListener('sourceopen', () => {
+                    this.log('MediaSource已打开', 'info');
+                    this.sourceBuffer = this.mediaSource.addSourceBuffer(mimeType);
+                });
+            }
+
+            // 如果sourceBuffer可用，添加数据
+            if (this.sourceBuffer && !this.sourceBuffer.updating) {
+                try {
+                    this.sourceBuffer.appendBuffer(bytes);
+                    this.log(`添加视频数据: ${bytes.length}字节`, 'info');
+                } catch (e) {
+                    this.log(`添加视频数据失败: ${e.message}`, 'error');
+                    // 如果失败，回退到Blob方案
+                    this.processVideoWithBlob(bytes, mimeType);
+                }
+            } else {
+                // 如果sourceBuffer不可用，使用Blob方案
+                this.processVideoWithBlob(bytes, mimeType);
+            }
+
+        } catch (error) {
+            this.log(`MediaSource处理失败: ${error.message}`, 'error');
+            // 回退到Blob方案
+            this.processVideoWithBlob(bytes, mimeType);
+        }
+    }
+
+    processVideoWithBlob(bytes, mimeType) {
+        try {
+            // 创建Blob URL用于视频显示
+            const blob = new Blob([bytes], { type: mimeType });
+            const videoUrl = URL.createObjectURL(blob);
+            
+            // 更新视频元素
+            const videoElement = this.elements.videoStream;
+            if (videoElement.tagName === 'VIDEO') {
+                // 如果之前有URL，释放它
+                if (videoElement.src && videoElement.src.startsWith('blob:')) {
+                    URL.revokeObjectURL(videoElement.src);
+                }
+                
+                videoElement.src = videoUrl;
+                videoElement.style.display = 'block';
+                
+                videoElement.play().catch(e => {
+                    this.log(`播放视频失败: ${e.message}`, 'error');
+                });
+            } else {
+                // 如果videoStream不是video元素，创建一个
+                this.createVideoElement(videoUrl);
+            }
+        } catch (error) {
+            this.log(`Blob视频处理失败: ${error.message}`, 'error');
+        }
+    }
+
+    isH264KeyFrame(bytes) {
+        // 简单的H.264关键帧检测
+        // 查找NAL单元类型5 (IDR帧)
+        for (let i = 0; i < bytes.length - 3; i++) {
+            if (bytes[i] === 0 && bytes[i + 1] === 0 && bytes[i + 2] === 0 && bytes[i + 3] === 1) {
+                const nalType = bytes[i + 4] & 0x1F;
+                if (nalType === 5) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    createVideoElement(videoUrl) {
+        // 创建video元素
+        const videoElement = document.createElement('video');
+        videoElement.autoplay = true;
+        videoElement.controls = true;
+        videoElement.muted = true; // 静音以避免自动播放问题
+        videoElement.style.width = '100%';
+        videoElement.style.height = '100%';
+        videoElement.style.borderRadius = '8px';
+        videoElement.style.backgroundColor = '#000';
+        videoElement.src = videoUrl;
+        
+        // 添加错误处理
+        videoElement.addEventListener('error', (e) => {
+            this.log(`视频播放错误: ${e.message}`, 'error');
+        });
+        
+        videoElement.addEventListener('loadstart', () => {
+            this.log('视频开始加载', 'info');
+        });
+        
+        videoElement.addEventListener('canplay', () => {
+            this.log('视频可以播放', 'success');
+            this.elements.videoPlaceholder.style.display = 'none';
+        });
+        
+        // 替换现有的视频容器
+        this.elements.videoStream.innerHTML = '';
+        this.elements.videoStream.appendChild(videoElement);
+        
+        // 尝试播放
+        videoElement.play().catch(e => {
+            this.log(`播放视频失败: ${e.message}`, 'error');
+            // 显示错误信息
+            this.elements.videoStream.innerHTML = `
+                <div style="text-align: center; padding: 20px; color: #666;">
+                    <div style="font-size: 48px; margin-bottom: 10px;">⚠️</div>
+                    <div>视频播放失败</div>
+                    <div style="font-size: 12px; margin-top: 10px;">${e.message}</div>
+                </div>
+            `;
+        });
     }
 
     sendCommand() {
@@ -251,11 +457,14 @@ class Go2RobotController {
     showVideo() {
         this.elements.videoPlaceholder.style.display = 'none';
         this.elements.videoStream.style.display = 'block';
+        this.log('视频显示已开启', 'success');
     }
 
     hideVideo() {
         this.elements.videoPlaceholder.style.display = 'flex';
         this.elements.videoStream.style.display = 'none';
+        this.cleanupVideoResources();
+        this.log('视频显示已关闭', 'info');
     }
 
     updateConnectionStatus(status, text) {
@@ -312,6 +521,17 @@ class Go2RobotController {
         setTimeout(() => {
             notification.classList.remove('show');
         }, 3000);
+    }
+
+    cleanupVideoResources() {
+        if (this.mediaSource) {
+            this.mediaSource.removeSourceBuffer(this.sourceBuffer);
+            this.sourceBuffer = null;
+        }
+        if (this.elements.videoStream.src && this.elements.videoStream.src.startsWith('blob:')) {
+            URL.revokeObjectURL(this.elements.videoStream.src);
+            this.elements.videoStream.src = ''; // 清除src属性
+        }
     }
 }
 

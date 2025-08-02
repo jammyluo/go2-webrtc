@@ -27,7 +27,6 @@ type WebRTCClient struct {
 	id             string
 	peerConnection *webrtc.PeerConnection
 	videoTrack     *webrtc.TrackLocalStaticSample
-	audioTrack     *webrtc.TrackLocalStaticSample
 	robotConn      *Go2Connection
 	onClose        func()
 }
@@ -75,18 +74,9 @@ func (proxy *WebRTCProxy) generateClientID() string {
 // NewWebRTCClient 创建新的WebRTC客户端
 func NewWebRTCClient(id string, robotConn *Go2Connection) *WebRTCClient {
 	config := webrtc.Configuration{
-		ICEServers: []webrtc.ICEServer{
-			{
-				URLs: []string{
-					"stun:stun.l.google.com:19302",
-					"stun:stun1.l.google.com:19302",
-					"stun:stun2.l.google.com:19302",
-					"stun:stun3.l.google.com:19302",
-					"stun:stun4.l.google.com:19302",
-				},
-			},
-		},
-		// 添加ICE配置
+		// 本地局域网环境，不需要STUN服务器
+		ICEServers: []webrtc.ICEServer{},
+		// 添加ICE配置，优化本地连接
 		ICETransportPolicy: webrtc.ICETransportPolicyAll,
 		BundlePolicy:       webrtc.BundlePolicyMaxBundle,
 		RTCPMuxPolicy:      webrtc.RTCPMuxPolicyRequire,
@@ -117,9 +107,13 @@ func NewWebRTCClient(id string, robotConn *Go2Connection) *WebRTCClient {
 	// 设置ICE连接状态变化
 	peerConnection.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
 		log.Printf("WebRTC客户端 %s ICE连接状态: %s", id, s.String())
-		// 即使ICE失败也继续处理，因为可能是本地连接
+		// 本地网络环境，ICE状态可能不同
 		if s == webrtc.ICEConnectionStateFailed {
-			log.Printf("WebRTC客户端 %s ICE连接失败，但继续处理视频流", id)
+			log.Printf("WebRTC客户端 %s ICE连接失败，但继续处理视频流（本地网络）", id)
+		} else if s == webrtc.ICEConnectionStateConnected {
+			log.Printf("WebRTC客户端 %s ICE连接成功", id)
+		} else if s == webrtc.ICEConnectionStateChecking {
+			log.Printf("WebRTC客户端 %s ICE连接检查中...", id)
 		}
 	})
 
@@ -132,23 +126,30 @@ func NewWebRTCClient(id string, robotConn *Go2Connection) *WebRTCClient {
 		}
 	})
 
+	// 设置数据通道状态变化
+	peerConnection.OnDataChannel(func(d *webrtc.DataChannel) {
+		log.Printf("WebRTC客户端 %s 数据通道: %s", id, d.Label())
+	})
+
 	return client
 }
 
 // AddVideoTrack 添加视频轨道到WebRTC客户端
 func (client *WebRTCClient) AddVideoTrack() error {
-	// 创建视频轨道，支持H.264编码
+	// 创建视频轨道，使用简化的H.264配置
 	videoTrack, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{
-			MimeType:    webrtc.MimeTypeH264,
-			ClockRate:   90000,
-			Channels:    0,
-			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42e01e",
+			MimeType:  webrtc.MimeTypeH264,
+			ClockRate: 90000,
+			Channels:  0,
+			// 使用最基础的H.264配置
+			SDPFmtpLine: "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id=42001f",
 		},
 		"video",
 		"pion",
 	)
 	if err != nil {
+		log.Printf("❌ 创建视频轨道失败: %v", err)
 		return fmt.Errorf("创建视频轨道失败: %v", err)
 	}
 
@@ -157,66 +158,60 @@ func (client *WebRTCClient) AddVideoTrack() error {
 	// 添加轨道到PeerConnection
 	_, err = client.peerConnection.AddTrack(videoTrack)
 	if err != nil {
+		log.Printf("❌ 添加视频轨道失败: %v", err)
 		return fmt.Errorf("添加视频轨道失败: %v", err)
 	}
 
-	log.Printf("WebRTC客户端 %s 视频轨道已添加", client.id)
-	return nil
-}
-
-// AddAudioTrack 添加音频轨道到WebRTC客户端
-func (client *WebRTCClient) AddAudioTrack() error {
-	// 创建音频轨道
-	audioTrack, err := webrtc.NewTrackLocalStaticSample(
-		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
-		"audio",
-		"pion",
-	)
-	if err != nil {
-		return fmt.Errorf("创建音频轨道失败: %v", err)
-	}
-
-	client.audioTrack = audioTrack
-
-	// 添加轨道到PeerConnection
-	_, err = client.peerConnection.AddTrack(audioTrack)
-	if err != nil {
-		return fmt.Errorf("添加音频轨道失败: %v", err)
-	}
-
-	log.Printf("WebRTC客户端 %s 音频轨道已添加", client.id)
+	log.Printf("✅ WebRTC客户端 %s 视频轨道已添加", client.id)
 	return nil
 }
 
 // WriteVideoSample 写入视频样本
 func (client *WebRTCClient) WriteVideoSample(frameData []byte, timestamp uint32) error {
 	if client.videoTrack != nil {
-		// 检查连接状态，即使ICE失败也尝试写入
-		if client.peerConnection.ConnectionState() == webrtc.PeerConnectionStateConnected ||
-			client.peerConnection.ConnectionState() == webrtc.PeerConnectionStateConnecting {
-			return client.videoTrack.WriteSample(media.Sample{
-				Data: frameData,
-				// Duration: time.Duration(timestamp) * time.Microsecond,
-				Duration:        time.Second / 30,
+		// 本地网络环境，更宽松的连接状态检查
+		connectionState := client.peerConnection.ConnectionState()
+		iceState := client.peerConnection.ICEConnectionState()
+		log.Printf("🎬 客户端 %s 连接状态: %s, ICE状态: %s, 视频帧大小: %d 字节",
+			client.id, connectionState.String(), iceState.String(), len(frameData))
+
+		// 本地网络环境下，即使ICE失败也尝试写入视频
+		if connectionState == webrtc.PeerConnectionStateConnected ||
+			connectionState == webrtc.PeerConnectionStateConnecting ||
+			connectionState == webrtc.PeerConnectionStateNew ||
+			(connectionState == webrtc.PeerConnectionStateFailed && iceState == webrtc.ICEConnectionStateFailed) {
+
+			// 检查视频帧数据
+			if len(frameData) == 0 {
+				log.Printf("⚠️ 客户端 %s 收到空视频帧", client.id)
+				return nil
+			}
+
+			// 创建媒体样本
+			sample := media.Sample{
+				Data:            frameData,
+				Duration:        time.Second / 30, // 30fps
 				PacketTimestamp: timestamp,
-			})
+			}
+
+			// 写入视频样本
+			err := client.videoTrack.WriteSample(sample)
+			if err != nil {
+				log.Printf("❌ 客户端 %s 写入视频样本失败: %v", client.id, err)
+				return err
+			} else {
+				log.Printf("✅ 客户端 %s 成功写入视频样本: %d 字节", client.id, len(frameData))
+			}
+
+			return nil
 		} else {
-			log.Printf("WebRTC客户端 %s 连接状态不佳，跳过视频帧", client.id)
+			log.Printf("⚠️ WebRTC客户端 %s 连接状态不佳 (%s, ICE: %s)，跳过视频帧",
+				client.id, connectionState.String(), iceState.String())
 			return nil
 		}
 	}
+	log.Printf("❌ 客户端 %s 视频轨道未初始化", client.id)
 	return fmt.Errorf("视频轨道未初始化")
-}
-
-// WriteAudioSample 写入音频样本
-func (client *WebRTCClient) WriteAudioSample(frameData []byte, timestamp uint32) error {
-	if client.audioTrack != nil {
-		return client.audioTrack.WriteSample(media.Sample{
-			Data:     frameData,
-			Duration: time.Duration(timestamp) * time.Microsecond,
-		})
-	}
-	return fmt.Errorf("音频轨道未初始化")
 }
 
 // CreateOffer 创建SDP提议
@@ -274,13 +269,16 @@ func (proxy *WebRTCProxy) handleConnect(w http.ResponseWriter, r *http.Request) 
 		req.RobotIP,
 		req.Token,
 		func() {
-			log.Printf("机器人验证成功: %s", connectionID)
+			log.Printf("PROXY 机器人验证成功: %s", connectionID)
+			// 自动开启视频流
+			proxy.connections[connectionID].OpenVideo()
+			log.Printf("PROXY 机器人连接成功，视频流已自动开启: %s", connectionID)
 		},
 		func(message interface{}, msgObj interface{}) {
-			log.Printf("收到消息: %v", message)
+			log.Printf("PROXY 收到消息: %v", message)
 		},
 		func() {
-			log.Printf("数据通道已打开: %s", connectionID)
+			log.Printf("PROXY 数据通道已打开: %s", connectionID)
 		},
 	)
 
@@ -295,9 +293,7 @@ func (proxy *WebRTCProxy) handleConnect(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 自动开启视频流
-	conn.OpenVideo()
-	log.Printf("机器人连接成功，视频流已自动开启: %s", connectionID)
+	log.Printf("机器人连接成功: %s", connectionID)
 
 	// 存储连接
 	proxy.connections[connectionID] = conn
@@ -325,21 +321,53 @@ func (proxy *WebRTCProxy) broadcastVideoFrame(connectionID string, frameData []b
 		}
 	}
 
+	// 详细记录视频帧信息
+	// log.Printf("🎬 收到视频帧: 连接ID=%s, 大小=%d字节, 时间戳=%d", connectionID, len(frameData), timestamp)
+	// if rtpInfo != nil {
+	// 	if payloadType, ok := rtpInfo["payload_type"].(float64); ok {
+	// 		log.Printf("🎬 视频编码类型: %v", payloadType)
+	// 	}
+	// 	if sequence, ok := rtpInfo["sequence"].(float64); ok {
+	// 		log.Printf("🎬 序列号: %v", sequence)
+	// 	}
+	// }
+
+	// // 检查视频帧数据
+	// if len(frameData) > 0 {
+	// 	// 检查H.264 NAL单元
+	// 	if len(frameData) >= 4 {
+	// 		nalType := frameData[4] & 0x1F
+	// 		log.Printf("🎬 NAL单元类型: %d", nalType)
+	// 		if nalType == 7 {
+	// 			log.Printf("🎬 检测到SPS帧")
+	// 		} else if nalType == 8 {
+	// 			log.Printf("🎬 检测到PPS帧")
+	// 		} else if nalType == 5 {
+	// 			log.Printf("🎬 检测到关键帧")
+	// 		} else if nalType == 1 {
+	// 			log.Printf("🎬 检测到P帧")
+	// 		}
+	// 	}
+	// }
+
 	// 广播给所有连接到该机器人的客户端
 	clientCount := 0
 	for clientID, client := range proxy.clients {
 		if client.robotConn == proxy.connections[connectionID] {
 			if err := client.WriteVideoSample(frameData, timestamp); err != nil {
-				log.Printf("向客户端 %s 写入视频样本失败: %v", clientID, err)
+				log.Printf("❌ 向客户端 %s 写入视频样本失败: %v", clientID, err)
 			} else {
 				clientCount++
+				log.Printf("✅ 成功向客户端 %s 写入视频样本: %d 字节", clientID, len(frameData))
 			}
 		}
 	}
 
-	if clientCount > 0 {
-		log.Printf("向 %d 个客户端广播视频帧: %d 字节", clientCount, len(frameData))
-	}
+	// if clientCount > 0 {
+	// 	log.Printf("📡 向 %d 个客户端广播视频帧: %d 字节", clientCount, len(frameData))
+	// } else {
+	// 	log.Printf("⚠️ 没有客户端接收视频帧")
+	// }
 }
 
 // handleWebRTCClient 处理WebRTC客户端连接

@@ -1,0 +1,404 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>本地局域网视频测试</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background: #f0f0f0;
+        }
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        input {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+        }
+        .status.disconnected {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        .video-container {
+            margin-top: 20px;
+            text-align: center;
+        }
+        #video-stream {
+            max-width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+        }
+        .log {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 4px;
+            height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 12px;
+        }
+        .info-box {
+            background: #e7f3ff;
+            border: 1px solid #b3d9ff;
+            border-radius: 4px;
+            padding: 10px;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🏠 本地局域网视频测试</h1>
+        
+        <div class="info-box">
+            <h3>📋 测试说明</h3>
+            <p>• 此页面专为本地局域网环境优化</p>
+            <p>• 无需STUN服务器，直接使用本地连接</p>
+            <p>• 适用于机器人和代理服务器在同一网络的情况</p>
+        </div>
+        
+        <div class="form-group">
+            <label for="robot-ip">机器人IP地址:</label>
+            <input type="text" id="robot-ip" placeholder="例如: 192.168.1.100" value="192.168.123.161">
+        </div>
+        
+        <div class="form-group">
+            <button id="connect-btn">连接并开启视频</button>
+            <button id="disconnect-btn" style="display: none;">断开连接</button>
+        </div>
+        
+        <div id="status" class="status disconnected">
+            未连接
+        </div>
+        
+        <div class="video-container">
+            <video id="video-stream" autoplay muted controls playsinline style="display: none;"></video>
+            <div id="video-placeholder">
+                <h3>🎥 等待视频流...</h3>
+                <p>点击连接按钮开始本地测试</p>
+            </div>
+        </div>
+        
+        <div class="log" id="log"></div>
+    </div>
+
+    <script>
+        class LocalVideoTest {
+            constructor() {
+                this.robotIP = '';
+                this.isConnected = false;
+                this.peerConnection = null;
+                this.clientID = null;
+                
+                this.initElements();
+                this.initEventListeners();
+            }
+
+            initElements() {
+                this.elements = {
+                    robotIP: document.getElementById('robot-ip'),
+                    connectBtn: document.getElementById('connect-btn'),
+                    disconnectBtn: document.getElementById('disconnect-btn'),
+                    status: document.getElementById('status'),
+                    videoStream: document.getElementById('video-stream'),
+                    videoPlaceholder: document.getElementById('video-placeholder'),
+                    log: document.getElementById('log')
+                };
+            }
+
+            initEventListeners() {
+                this.elements.connectBtn.addEventListener('click', () => this.connect());
+                this.elements.disconnectBtn.addEventListener('click', () => this.disconnect());
+            }
+
+            async connect() {
+                this.robotIP = this.elements.robotIP.value.trim();
+
+                if (!this.robotIP) {
+                    this.showNotification('请输入机器人IP地址', 'error');
+                    return;
+                }
+
+                this.updateStatus('connecting', '连接中...');
+                this.elements.connectBtn.disabled = true;
+
+                try {
+                    // 连接到机器人
+                    await this.connectToRobot();
+                    
+                    // 建立WebRTC连接
+                    await this.establishWebRTCConnection();
+                    
+                    this.isConnected = true;
+                    this.updateStatus('connected', '已连接 - 本地视频流已开启');
+                    this.elements.connectBtn.style.display = 'none';
+                    this.elements.disconnectBtn.style.display = 'inline-block';
+                    
+                } catch (error) {
+                    this.log(`连接失败: ${error.message}`, 'error');
+                    this.updateStatus('disconnected', '连接失败');
+                    this.elements.connectBtn.disabled = false;
+                }
+            }
+
+            async connectToRobot() {
+                this.log('正在连接机器人（本地模式）...', 'info');
+                
+                const response = await fetch('/api/connect', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        robot_ip: this.robotIP,
+                        token: ''
+                    })
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`连接机器人失败: ${errorText}`);
+                }
+
+                const result = await response.json();
+                if (!result.success) {
+                    throw new Error(result.message);
+                }
+
+                this.log('机器人连接成功（本地模式）', 'success');
+            }
+
+            async establishWebRTCConnection() {
+                this.log('建立本地WebRTC连接...', 'info');
+                
+                const clientUrl = `/webrtc/client?robot_ip=${encodeURIComponent(this.robotIP)}&token=`;
+                const clientResponse = await fetch(clientUrl);
+                
+                if (!clientResponse.ok) {
+                    const errorText = await clientResponse.text();
+                    throw new Error(`获取WebRTC客户端失败: ${clientResponse.status} - ${errorText}`);
+                }
+
+                const clientResult = await clientResponse.json();
+                this.clientID = clientResult.client_id;
+                
+                this.log(`WebRTC客户端ID: ${this.clientID}`, 'info');
+
+                // 创建RTCPeerConnection - 本地局域网模式
+                this.peerConnection = new RTCPeerConnection({
+                    // 本地局域网环境，不使用STUN服务器
+                    iceServers: [],
+                    iceTransportPolicy: 'all',
+                    bundlePolicy: 'max-bundle',
+                    rtcpMuxPolicy: 'require'
+                });
+
+                this.log('RTCPeerConnection创建成功（本地模式）', 'success');
+
+                // 设置事件处理
+                this.peerConnection.ontrack = (event) => {
+                    this.log('收到视频轨道（本地模式）', 'success');
+                    this.elements.videoStream.srcObject = event.streams[0];
+                    this.elements.videoPlaceholder.style.display = 'none';
+                    this.elements.videoStream.style.display = 'block';
+                    
+                    // 监听视频事件
+                    this.elements.videoStream.addEventListener('loadedmetadata', () => {
+                        this.log('视频元数据已加载', 'success');
+                        this.log(`视频尺寸: ${this.elements.videoStream.videoWidth}x${this.elements.videoStream.videoHeight}`, 'info');
+                    });
+                    
+                    this.elements.videoStream.addEventListener('canplay', () => {
+                        this.log('视频可以播放', 'success');
+                    });
+                    
+                    this.elements.videoStream.addEventListener('playing', () => {
+                        this.log('视频开始播放', 'success');
+                    });
+                    
+                    this.elements.videoStream.addEventListener('error', (e) => {
+                        this.log(`视频播放错误: ${e.message}`, 'error');
+                    });
+                    
+                    this.elements.videoStream.addEventListener('abort', (e) => {
+                        this.log(`视频播放被中止: ${e.message}`, 'warning');
+                        // 尝试重新播放
+                        setTimeout(() => {
+                            this.log('尝试重新播放视频...', 'info');
+                            this.elements.videoStream.play().catch(e => {
+                                this.log(`重新播放失败: ${e.message}`, 'error');
+                            });
+                        }, 1000);
+                    });
+                    
+                    // 延迟播放，避免被浏览器阻止
+                    setTimeout(() => {
+                        this.elements.videoStream.play().then(() => {
+                            this.log('视频开始播放（本地模式）', 'success');
+                        }).catch(e => {
+                            this.log(`视频播放失败: ${e.message}`, 'error');
+                            this.log('可能需要用户交互才能播放视频', 'warning');
+                            // 添加点击播放功能
+                            this.elements.videoStream.style.cursor = 'pointer';
+                            this.elements.videoStream.onclick = () => {
+                                this.elements.videoStream.play().then(() => {
+                                    this.log('手动播放成功', 'success');
+                                }).catch(e => {
+                                    this.log(`手动播放失败: ${e.message}`, 'error');
+                                });
+                            };
+                        });
+                    }, 500);
+                };
+
+                this.peerConnection.oniceconnectionstatechange = () => {
+                    this.log(`ICE连接状态: ${this.peerConnection.iceConnectionState}`, 'info');
+                    // 本地网络环境，ICE状态可能不同
+                    if (this.peerConnection.iceConnectionState === 'failed') {
+                        this.log('ICE连接失败，但继续处理视频流（本地网络）', 'warning');
+                    } else if (this.peerConnection.iceConnectionState === 'connected') {
+                        this.log('ICE连接成功（本地网络）', 'success');
+                    }
+                };
+
+                this.peerConnection.onconnectionstatechange = () => {
+                    this.log(`连接状态: ${this.peerConnection.connectionState}`, 'info');
+                    if (this.peerConnection.connectionState === 'connected') {
+                        this.log('WebRTC连接已建立（本地模式）', 'success');
+                    } else if (this.peerConnection.connectionState === 'failed') {
+                        this.log('WebRTC连接失败（本地模式）', 'error');
+                    }
+                };
+
+                this.peerConnection.onicecandidate = (event) => {
+                    if (event.candidate) {
+                        this.log(`ICE候选地址: ${event.candidate.candidate}`, 'info');
+                    } else {
+                        this.log('ICE候选地址收集完成（本地模式）', 'info');
+                    }
+                };
+
+                // 设置远程描述
+                await this.peerConnection.setRemoteDescription(new RTCSessionDescription({
+                    type: clientResult.type,
+                    sdp: clientResult.sdp
+                }));
+
+                // 创建应答
+                const answer = await this.peerConnection.createAnswer();
+                await this.peerConnection.setLocalDescription(answer);
+
+                // 发送应答到服务器
+                const answerResponse = await fetch('/webrtc/answer', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        client_id: this.clientID,
+                        answer: {
+                            type: answer.type,
+                            sdp: answer.sdp
+                        }
+                    })
+                });
+
+                if (!answerResponse.ok) {
+                    const errorText = await answerResponse.text();
+                    throw new Error(`发送WebRTC应答失败: ${answerResponse.status} - ${errorText}`);
+                }
+
+                const answerResult = await answerResponse.json();
+                if (!answerResult.success) {
+                    throw new Error(answerResult.message);
+                }
+
+                this.log('WebRTC连接建立成功（本地模式）', 'success');
+            }
+
+            disconnect() {
+                if (this.peerConnection) {
+                    this.peerConnection.close();
+                    this.peerConnection = null;
+                }
+                
+                this.isConnected = false;
+                this.updateStatus('disconnected', '已断开连接');
+                this.elements.connectBtn.style.display = 'inline-block';
+                this.elements.disconnectBtn.style.display = 'none';
+                this.elements.connectBtn.disabled = false;
+                this.elements.videoPlaceholder.style.display = 'block';
+                this.elements.videoStream.style.display = 'none';
+                this.log('已断开连接（本地模式）', 'info');
+            }
+
+            updateStatus(status, text) {
+                this.elements.status.className = `status ${status}`;
+                this.elements.status.textContent = text;
+            }
+
+            log(message, type = 'info') {
+                const timestamp = new Date().toLocaleTimeString();
+                const logEntry = document.createElement('div');
+                logEntry.style.color = type === 'error' ? 'red' : type === 'success' ? 'green' : 'blue';
+                logEntry.textContent = `[${timestamp}] ${message}`;
+                
+                this.elements.log.appendChild(logEntry);
+                this.elements.log.scrollTop = this.elements.log.scrollHeight;
+            }
+
+            showNotification(message, type = 'info') {
+                alert(`${type.toUpperCase()}: ${message}`);
+            }
+        }
+
+        // 页面加载完成后初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            window.localVideoTest = new LocalVideoTest();
+            window.localVideoTest.log('本地局域网视频测试已加载', 'success');
+            window.localVideoTest.log('专为本地网络环境优化，无需STUN服务器', 'info');
+        });
+    </script>
+</body>
+</html> 
