@@ -494,10 +494,10 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 		// 创建GPIO控制器并演示高低电平控制
 		gpioCtrl := gpio.NewGPIOController(27)
 		gpioCtrl.Pulse(time.Millisecond * time.Duration(70))
-		return
+		log.Printf("Shoot 命令已发送")
+	} else {
+		conn.SendCommand(req.Command, req.Data)
 	}
-
-	conn.SendCommand(req.Command, req.Data)
 
 	json.NewEncoder(w).Encode(ProxyResponse{
 		Success: true,
