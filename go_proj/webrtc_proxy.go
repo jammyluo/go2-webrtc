@@ -478,24 +478,21 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	log.Printf("收到命令请求: %v", req)
-
-	connectionID := proxy.generateConnectionID(req.RobotIP, req.Token)
-
-	proxy.mutex.RLock()
-	conn, exists := proxy.connections[connectionID]
-	proxy.mutex.RUnlock()
-
-	if !exists {
-		http.Error(w, "连接不存在", http.StatusNotFound)
-		return
-	}
-
 	if req.Command == "Shoot" {
 		// 创建GPIO控制器并演示高低电平控制
 		gpioCtrl := gpio.NewGPIOController(27)
 		gpioCtrl.Pulse(time.Millisecond * time.Duration(70))
 		log.Printf("Shoot 命令已发送")
 	} else {
+		connectionID := proxy.generateConnectionID(req.RobotIP, req.Token)
+		proxy.mutex.RLock()
+		conn, exists := proxy.connections[connectionID]
+		proxy.mutex.RUnlock()
+
+		if !exists {
+			http.Error(w, "连接不存在", http.StatusNotFound)
+			return
+		}
 		conn.SendCommand(req.Command, req.Data)
 	}
 
