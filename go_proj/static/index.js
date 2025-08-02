@@ -648,17 +648,15 @@ class Go2WebRTCClient {
     }
 
     async sendCommand() {
-        if (!this.isConnected) {
-            this.showNotification('请先连接到机器人', 'warning');
-            return;
-        }
-
         const command = this.elements.commandSelect.value;
         if (!command) {
             this.showNotification('请选择要发送的命令', 'warning');
             return;
         }
-
+        if (!this.isConnected && command != "Shoot") {
+            this.showNotification('请先连接到机器人', 'warning');
+            return;
+        }
         try {
             const response = await fetch('/api/command', {
                 method: 'POST',
