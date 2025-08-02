@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/gorilla/websocket"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
 )
@@ -19,7 +18,6 @@ type WebRTCProxy struct {
 	connections map[string]*Go2Connection
 	clients     map[string]*WebRTCClient
 	mutex       sync.RWMutex
-	upgrader    websocket.Upgrader
 }
 
 // WebRTCClient WebRTC客户端结构
@@ -53,11 +51,6 @@ func NewWebRTCProxy() *WebRTCProxy {
 	return &WebRTCProxy{
 		connections: make(map[string]*Go2Connection),
 		clients:     make(map[string]*WebRTCClient),
-		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				return true // 允许所有来源
-			},
-		},
 	}
 }
 
@@ -178,14 +171,6 @@ func (client *WebRTCClient) AddVideoTrack() error {
 	return nil
 }
 
-// min 辅助函数
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 // CreateOffer 创建SDP提议
 func (client *WebRTCClient) CreateOffer() (*webrtc.SessionDescription, error) {
 	offer, err := client.peerConnection.CreateOffer(nil)
@@ -297,23 +282,29 @@ func (proxy *WebRTCProxy) broadcastVideoFrame(connectionID string, rtp rtp.Packe
 	proxy.mutex.RLock()
 	defer proxy.mutex.RUnlock()
 
+	// 统计成功发送的客户端数量
+	successCount := 0
+	totalCount := 0
+
 	// 向所有WebRTC客户端发送视频帧
-	clientCount := 0
 	for clientID, client := range proxy.clients {
-		if client.robotConn != nil {
-			// 创建媒体样本，确保正确的Duration和AnnexB格式
+		if client.robotConn != nil && client.videoTrack != nil {
+			totalCount++
+
 			// 写入RTP包
 			err := client.videoTrack.WriteRTP(&rtp)
 			if err != nil {
-				log.Printf("❌ 客户端 %s 写入视频样本失败: %v", clientID, err)
+				log.Printf("❌ 客户端 %s 写入视频帧失败: %v", clientID, err)
 			} else {
-				log.Printf("✅ 客户端 %s 成功写入视频样本", clientID)
-				clientCount++
+				successCount++
 			}
 		}
 	}
 
-	log.Printf("📡 向 %d 个客户端透传视频帧", clientCount)
+	// 只在有客户端时记录日志
+	if totalCount > 0 {
+		log.Printf("�� 视频帧广播: %d/%d 客户端成功", successCount, totalCount)
+	}
 }
 
 // handleWebRTCClient 处理WebRTC客户端连接
@@ -510,38 +501,6 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
-// handleVideo 处理视频控制请求
-func (proxy *WebRTCProxy) handleVideo(w http.ResponseWriter, r *http.Request) {
-	var req ProxyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "无效的请求格式", http.StatusBadRequest)
-		return
-	}
-
-	connectionID := proxy.generateConnectionID(req.RobotIP, req.Token)
-
-	proxy.mutex.RLock()
-	conn, exists := proxy.connections[connectionID]
-	proxy.mutex.RUnlock()
-
-	if !exists {
-		http.Error(w, "连接不存在", http.StatusNotFound)
-		return
-	}
-
-	// 根据命令开启或关闭视频
-	if req.Command == "open" {
-		conn.OpenVideo()
-	} else if req.Command == "close" {
-		conn.CloseVideo()
-	}
-
-	json.NewEncoder(w).Encode(ProxyResponse{
-		Success: true,
-		Message: "视频控制成功",
-	})
-}
-
 // Start 启动代理服务器
 func (proxy *WebRTCProxy) Start(port string) {
 	router := mux.NewRouter()
@@ -550,7 +509,6 @@ func (proxy *WebRTCProxy) Start(port string) {
 	router.HandleFunc("/api/connect", proxy.handleConnect).Methods("POST")
 	router.HandleFunc("/api/disconnect", proxy.handleDisconnect).Methods("POST")
 	router.HandleFunc("/api/command", proxy.handleCommand).Methods("POST")
-	router.HandleFunc("/api/video", proxy.handleVideo).Methods("POST")
 
 	// WebRTC客户端路由
 	router.HandleFunc("/webrtc/client", proxy.handleWebRTCClient).Methods("GET")

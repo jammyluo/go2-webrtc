@@ -83,7 +83,6 @@ type Go2Connection struct {
 
 	// 视频处理相关
 	videoTrack   *webrtc.TrackRemote
-	videoEnabled bool
 	onVideoFrame func(rtp.Packet) // 视频帧回调
 }
 
@@ -175,8 +174,6 @@ func (conn *Go2Connection) handleTrack(remoteTrack *webrtc.TrackRemote, receiver
 
 	if remoteTrack.Kind() == webrtc.RTPCodecTypeVideo {
 		conn.videoTrack = remoteTrack
-		conn.videoEnabled = true
-
 		// 启动视频处理
 		go conn.processVideoTrack(remoteTrack)
 
@@ -186,18 +183,25 @@ func (conn *Go2Connection) handleTrack(remoteTrack *webrtc.TrackRemote, receiver
 	}
 }
 
-// processVideoTrack 处理视频轨道（简化版本，只负责数据传输）
+// processVideoTrack 处理视频轨道
 func (conn *Go2Connection) processVideoTrack(track *webrtc.TrackRemote) {
 	log.Printf("🎬 开始处理视频轨道")
+
 	for {
 		rtp, _, err := track.ReadRTP()
 		if err != nil {
-			log.Printf("🎬 读取RTP包失败: %v", err)
+			if err == io.EOF {
+				log.Printf("🎬 视频轨道已结束")
+			} else {
+				log.Printf("🎬 读取RTP包失败: %v", err)
+			}
 			break
 		}
-		conn.onVideoFrame(*rtp)
 
-		time.Sleep(33 * time.Millisecond) // 约30fps
+		// 调用视频帧回调
+		if conn.onVideoFrame != nil {
+			conn.onVideoFrame(*rtp)
+		}
 	}
 
 	log.Printf("🎬 视频轨道处理结束")
@@ -667,27 +671,13 @@ func generate_id() int {
 // OpenVideo 开启视频
 func (conn *Go2Connection) OpenVideo() {
 	conn.publish("", "on", VideoType)
-
-	// 启动视频处理
-	if conn.videoTrack != nil {
-		go conn.processVideoTrack(conn.videoTrack)
-		log.Printf("🎬 视频已开启")
-	}
+	log.Printf("🎬 视频开启命令已发送")
 }
 
 // CloseVideo 关闭视频
 func (conn *Go2Connection) CloseVideo() {
 	conn.publish("", "off", VideoType)
-
-	// 停止视频处理
-	if conn.videoTrack != nil {
-		// 理论上，当数据通道关闭时，视频轨道也会被释放
-		// 但为了确保，可以在这里停止视频处理
-		// 如果需要更精确的控制，可以考虑在数据通道关闭时停止goroutine
-		// 或者在数据通道关闭时设置一个标志
-		// 目前，我们假设数据通道关闭后，视频轨道也会被释放
-		log.Printf("🎬 视频已关闭")
-	}
+	log.Printf("🎬 视频关闭命令已发送")
 }
 
 // SendCommand 发送机器人命令
