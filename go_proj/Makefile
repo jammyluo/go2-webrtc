@@ -12,10 +12,10 @@ deps:
 
 # 构建代理服务器
 build: deps
-	go build -o webrtc-proxy webrtc_proxy.go go2_webrtc.go
+	go build -o webrtc-proxy .
 
 arm:
-	GOOS=linux GOARCH=arm64 go build -o webrtc-proxy-arm64 webrtc_proxy.go go2_webrtc.go
+	GOOS=linux GOARCH=arm64 go build -o webrtc-proxy-arm64 .
 # 运行代理服务器
 run: build
 	./webrtc-proxy

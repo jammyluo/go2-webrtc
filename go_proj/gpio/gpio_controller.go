@@ -10,8 +10,6 @@ import (
 	"periph.io/x/conn/v3/gpio"
 	"periph.io/x/conn/v3/gpio/gpioreg"
 	"periph.io/x/host/v3"
-
-	"remote-ctrl-robot/internal/gpio"
 )
 
 // GPIOController GPIO控制器
