@@ -688,7 +688,7 @@ class Go2WebRTCClient {
     }
 
     async sendQuickCommand(command) {
-        if (!this.isConnected) {
+        if (!this.isConnected && command != "Shoot") {
             this.showNotification('请先连接到机器人', 'warning');
             return;
         }
