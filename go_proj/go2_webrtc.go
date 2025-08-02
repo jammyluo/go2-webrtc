@@ -101,6 +101,13 @@ type SDPOffer struct {
 	Token string `json:"token"`
 }
 
+// MoveCommand 移动命令结构
+type MoveCommand struct {
+	X float64 `json:"x"`
+	Y float64 `json:"y"`
+	Z float64 `json:"z"`
+}
+
 // NewGo2Connection 创建新的Go2连接
 func NewGo2Connection(ip, token string, onValidated func(), onMessage func(message interface{}, msgObj interface{}), onOpen func()) *Go2Connection {
 	config := webrtc.Configuration{
@@ -683,10 +690,25 @@ func (conn *Go2Connection) CloseVideo() {
 // SendCommand 发送机器人命令
 func (conn *Go2Connection) SendCommand(command string, data interface{}) {
 	if cmdID, exists := SportCmd[command]; exists {
-		conn.publish("rt/api/sport/request", map[string]interface{}{
-			"header":    map[string]interface{}{"identity": map[string]interface{}{"id": generate_id(), "api_id": cmdID}},
-			"parameter": strconv.Itoa(cmdID),
-		}, MessageType)
+		if data != nil {
+			//json 序列化
+			jsonData, err := json.Marshal(data)
+			if err != nil {
+				log.Printf("JSON序列化失败: %v", err)
+				return
+			}
+			strData := string(jsonData)
+
+			conn.publish("rt/api/sport/request", map[string]interface{}{
+				"header":    map[string]interface{}{"identity": map[string]interface{}{"id": generate_id(), "api_id": cmdID}},
+				"parameter": strData,
+			}, MessageType)
+		} else {
+			conn.publish("rt/api/sport/request", map[string]interface{}{
+				"header":    map[string]interface{}{"identity": map[string]interface{}{"id": generate_id(), "api_id": cmdID}},
+				"parameter": strconv.Itoa(cmdID),
+			}, MessageType)
+		}
 	} else {
 		log.Printf("未知命令: %s", command)
 	}

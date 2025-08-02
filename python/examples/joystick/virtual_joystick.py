@@ -220,7 +220,7 @@ def gen_mov_command(x: float, y: float, z: float):
     return json.dumps(command)
 
 async def start_virtual_joy_bridge(robot_conn, virtual_pad):
-    # await robot_conn.connect_robot()
+    await robot_conn.connect_robot()
 
     while True:
         # 处理 pygame 事件
@@ -244,15 +244,15 @@ async def start_virtual_joy_bridge(robot_conn, virtual_pad):
         # 按钮控制
         if joy_btn_a_is_pressed == 1:
             robot_cmd = gen_command(ROBOT_CMD["StandUp"])
-            # robot_conn.data_channel.send(robot_cmd)
+            robot_conn.data_channel.send(robot_cmd)
 
         if joy_btn_b_is_pressed == 1:
             robot_cmd = gen_command(ROBOT_CMD["StandDown"])
-            # robot_conn.data_channel.send(robot_cmd)
+            robot_conn.data_channel.send(robot_cmd)
             
         if joy_btn_x_is_pressed == 1:
-            robot_cmd = gen_command(ROBOT_CMD["Sit"])
-            # robot_conn.data_channel.send(robot_cmd)
+            robot_cmd = gen_command(ROBOT_CMD["StopMove"])
+            robot_conn.data_channel.send(robot_cmd)
             
         if joy_btn_y_is_pressed == 1:
             robot_cmd = gen_command(ROBOT_CMD["Hello"])
@@ -261,7 +261,7 @@ async def start_virtual_joy_bridge(robot_conn, virtual_pad):
         # 摇杆移动控制
         if abs(joy_move_x) > 0.0 or abs(joy_move_y) > 0.0 or abs(joy_move_z) > 0.0:
             robot_cmd = gen_mov_command(joy_move_x, joy_move_y, joy_move_z)
-            # robot_conn.data_channel.send(robot_cmd)
+            robot_conn.data_channel.send(robot_cmd)
 
         # 控制帧率
         virtual_pad.clock.tick(60)
@@ -273,8 +273,8 @@ async def main():
     
     # 创建机器人连接
     conn = Go2Connection(
-        os.getenv("GO2_IP"),
-        os.getenv("GO2_TOKEN"),
+        "192.168.123.161",
+        "",
     )
 
     try:

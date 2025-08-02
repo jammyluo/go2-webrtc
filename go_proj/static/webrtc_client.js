@@ -8,8 +8,17 @@ class Go2WebRTCClient {
         this.clientID = null;
         this.reconnecting = false; // 新增重连状态
         
+        // 摇杆相关
+        this.joysticks = {
+            left: null,
+            right: null
+        };
+        this.movementInterval = null;
+        this.lastMovement = { x: 0, y: 0, z: 0 };
+        
         this.initElements();
         this.initEventListeners();
+        this.initJoysticks();
         this.loadSavedValues();
     }
 
@@ -30,7 +39,12 @@ class Go2WebRTCClient {
             videoPlaceholder: document.getElementById('video-placeholder'),
             logContent: document.getElementById('log-content'),
             notification: document.getElementById('notification'),
-            quickCommands: document.querySelectorAll('.quick-command')
+            quickCommands: document.querySelectorAll('.quick-command'),
+            // 摇杆元素
+            joystickLeft: document.getElementById('joystick-left'),
+            joystickRight: document.getElementById('joystick-right'),
+            // 测试按钮
+            testStatusBtn: document.getElementById('test-status-btn')
         };
     }
 
@@ -55,6 +69,326 @@ class Go2WebRTCClient {
         // 输入框变化时保存
         this.elements.robotIP.addEventListener('change', () => this.saveValues());
         this.elements.token.addEventListener('change', () => this.saveValues());
+
+        // 键盘控制
+        document.addEventListener('keydown', (e) => this.handleKeyDown(e));
+        document.addEventListener('keyup', (e) => this.handleKeyUp(e));
+
+        // 测试状态更新按钮
+        if (this.elements.testStatusBtn) {
+            this.elements.testStatusBtn.addEventListener('click', () => {
+                console.log('测试状态更新按钮被点击');
+                console.log('当前连接状态:', this.isConnected);
+                console.log('连接按钮显示状态:', this.elements.connectBtn.style.display);
+                console.log('断开按钮显示状态:', this.elements.disconnectBtn.style.display);
+                console.log('连接文本:', this.elements.connectText.textContent);
+                console.log('状态文本:', this.elements.statusText.textContent);
+                
+                // 测试状态更新
+                this.updateConnectionStatus('connected', '测试已连接');
+                this.elements.connectBtn.style.display = 'none';
+                this.elements.disconnectBtn.style.display = 'inline-block';
+                
+                setTimeout(() => {
+                    this.updateConnectionStatus('disconnected', '测试未连接');
+                    this.elements.connectBtn.style.display = 'inline-block';
+                    this.elements.disconnectBtn.style.display = 'none';
+                }, 2000);
+            });
+        }
+    }
+
+    // 初始化摇杆
+    initJoysticks() {
+        console.log('初始化摇杆...');
+        
+        // 检查元素是否存在
+        if (!this.elements.joystickLeft || !this.elements.joystickRight) {
+            console.error('摇杆元素未找到，等待DOM加载...');
+            setTimeout(() => this.initJoysticks(), 100);
+            return;
+        }
+        
+        console.log('左摇杆元素:', this.elements.joystickLeft);
+        console.log('右摇杆元素:', this.elements.joystickRight);
+        
+        // 设置摇杆
+        this.setupSimpleJoystick(this.elements.joystickLeft, 'left');
+        this.setupSimpleJoystick(this.elements.joystickRight, 'right');
+        
+        this.startMovementControl();
+        console.log('摇杆初始化完成');
+    }
+
+    // 简单的摇杆设置
+    setupSimpleJoystick(element, side) {
+        console.log(`设置${side}摇杆:`, element);
+        
+        const knob = element.querySelector('.joystick-knob');
+        const valueDisplay = element.querySelector('.joystick-value');
+        
+        if (!knob || !valueDisplay) {
+            console.error(`${side}摇杆元素不完整`);
+            return;
+        }
+        
+        let isActive = false;
+        let currentX = 0, currentY = 0;
+        const maxDistance = 50;
+        const self = this;
+        
+        // 更新位置函数
+        const updatePosition = (clientX, clientY) => {
+            const rect = element.getBoundingClientRect();
+            const centerX = rect.left + rect.width / 2;
+            const centerY = rect.top + rect.height / 2;
+            
+            const deltaX = clientX - centerX;
+            const deltaY = clientY - centerY;
+            const distance = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+            
+            if (distance > maxDistance) {
+                const angle = Math.atan2(deltaY, deltaX);
+                currentX = Math.cos(angle) * maxDistance;
+                currentY = Math.sin(angle) * maxDistance;
+            } else {
+                currentX = deltaX;
+                currentY = deltaY;
+            }
+            
+            knob.style.transform = `translate(calc(-50% + ${currentX}px), calc(-50% + ${currentY}px))`;
+            
+            const normalizedX = (currentX / maxDistance).toFixed(1);
+            const normalizedY = (currentY / maxDistance).toFixed(1);
+            
+            if (side === 'left') {
+                valueDisplay.textContent = `前后: ${normalizedX} 转向: ${normalizedY}`;
+            } else {
+                valueDisplay.textContent = `左右: ${normalizedX} 上下: ${normalizedY}`;
+            }
+            
+            self.joysticks[side] = {
+                x: parseFloat(normalizedX),
+                y: parseFloat(normalizedY),
+                active: true
+            };
+            
+            console.log(`${side}摇杆: X=${normalizedX}, Y=${normalizedY}`);
+            console.log(`${side}摇杆数据:`, self.joysticks[side]);
+        };
+        
+        // 重置位置函数
+        const resetPosition = () => {
+            knob.style.transform = 'translate(-50%, -50%)';
+            currentX = 0;
+            currentY = 0;
+            
+            if (side === 'left') {
+                valueDisplay.textContent = '前后: 0.0 转向: 0.0';
+            } else {
+                valueDisplay.textContent = '左右: 0.0 上下: 0.0';
+            }
+            
+            if (self.joysticks[side]) {
+                self.joysticks[side].active = false;
+                console.log(`${side}摇杆重置，active设为false`);
+            }
+            
+            console.log(`${side}摇杆重置`);
+        };
+        
+        // 鼠标事件
+        element.addEventListener('mousedown', (e) => {
+            console.log(`${side}摇杆按下`);
+            e.preventDefault();
+            isActive = true;
+            element.classList.add('active');
+            updatePosition(e.clientX, e.clientY);
+        });
+        
+        document.addEventListener('mousemove', (e) => {
+            if (isActive) {
+                e.preventDefault();
+                updatePosition(e.clientX, e.clientY);
+            }
+        });
+        
+        document.addEventListener('mouseup', () => {
+            if (isActive) {
+                console.log(`${side}摇杆释放`);
+                isActive = false;
+                element.classList.remove('active');
+                resetPosition();
+            }
+        });
+        
+        // 触摸事件
+        element.addEventListener('touchstart', (e) => {
+            console.log(`${side}摇杆触摸开始`);
+            e.preventDefault();
+            isActive = true;
+            element.classList.add('active');
+            const touch = e.touches[0];
+            updatePosition(touch.clientX, touch.clientY);
+        });
+        
+        document.addEventListener('touchmove', (e) => {
+            if (isActive) {
+                e.preventDefault();
+                const touch = e.touches[0];
+                updatePosition(touch.clientX, touch.clientY);
+            }
+        });
+        
+        document.addEventListener('touchend', () => {
+            if (isActive) {
+                console.log(`${side}摇杆触摸结束`);
+                isActive = false;
+                element.classList.remove('active');
+                resetPosition();
+            }
+        });
+        
+        console.log(`${side}摇杆设置完成`);
+    }
+
+    // 启动移动控制循环
+    startMovementControl() {
+        this.movementInterval = setInterval(() => {
+            this.updateMovement();
+        }, 100); // 10Hz更新频率
+    }
+
+    // 更新移动控制
+    updateMovement() {
+        console.log('updateMovement 被调用, isConnected:', this.isConnected);
+        
+        // 即使未连接也允许摇杆操作，用于测试
+        let x = 0, y = 0, z = 0;
+
+        // 左摇杆：前后移动(X)和转向(Z)
+        if (this.joysticks.left && this.joysticks.left.active) {
+            x = this.joysticks.left.y * -1;
+            z = this.joysticks.left.x * -1;
+            console.log('左摇杆激活:', { x, z });
+        }
+
+        // 右摇杆：左右移动(Y)和上下移动(暂未使用)
+        if (this.joysticks.right && this.joysticks.right.active) {
+            y = this.joysticks.right.x * -1;
+            console.log('右摇杆激活:', { y });
+            // 上下移动暂时不使用，可以后续扩展
+        }
+
+        // 应用死区
+        const deadzone = 0.1;
+        x = Math.abs(x) > deadzone ? x : 0;
+        y = Math.abs(y) > deadzone ? y : 0;
+        z = Math.abs(z) > deadzone ? z : 0;
+
+        console.log('处理后的移动值:', { x, y, z });
+        console.log('上次移动值:', this.lastMovement);
+
+        // 检查是否有变化
+        if (x !== this.lastMovement.x || y !== this.lastMovement.y || z !== this.lastMovement.z) {
+            console.log('移动值发生变化，准备发送命令');
+            this.lastMovement = { x, y, z };
+            
+            if (this.isConnected) {
+                this.sendMovementCommand(x, y, z);
+            } else {
+                console.log('未连接到机器人，跳过发送移动命令');
+            }
+        } else {
+            console.log('移动值无变化，跳过发送命令');
+        }
+    }
+
+    // 发送移动命令
+    async sendMovementCommand(x, y, z) {
+        console.log('sendMovementCommand 被调用:', { x, y, z });
+        
+        if (!this.isConnected) {
+            console.log('未连接到机器人，跳过发送移动命令');
+            return;
+        }
+
+        try {
+            console.log('准备发送移动命令到API...');
+            const response = await fetch('/api/command', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    robot_ip: this.robotIP,
+                    token: this.token,
+                    command: 'Move',
+                    data: { x, y, z }
+                })
+            });
+
+            console.log('API响应状态:', response.status);
+
+            if (!response.ok) {
+                throw new Error('发送移动命令失败');
+            }
+
+            const result = await response.json();
+            console.log('API响应结果:', result);
+            
+            if (!result.success) {
+                throw new Error(result.message);
+            }
+            
+            console.log('移动命令发送成功');
+        } catch (error) {
+            console.error('移动命令发送失败:', error);
+            this.log(`移动命令发送失败: ${error.message}`, 'error');
+        }
+    }
+
+    // 键盘控制处理
+    handleKeyDown(event) {
+        if (!this.isConnected) return;
+
+        const key = event.key.toLowerCase();
+        let x = 0, y = 0, z = 0;
+
+        switch (key) {
+            case 'w': // 前进
+                x = 0.8;
+                break;
+            case 's': // 后退
+                x = -0.4;
+                break;
+            case 'a': // 左移
+                y = 0.4;
+                break;
+            case 'd': // 右移
+                y = -0.4;
+                break;
+            case 'q': // 左转
+                z = 2;
+                break;
+            case 'e': // 右转
+                z = -2;
+                break;
+            default:
+                return;
+        }
+
+        this.sendMovementCommand(x, y, z);
+    }
+
+    handleKeyUp(event) {
+        if (!this.isConnected) return;
+
+        const key = event.key.toLowerCase();
+        if (['w', 's', 'a', 'd', 'q', 'e'].includes(key)) {
+            // 停止移动
+            this.sendMovementCommand(0, 0, 0);
+        }
     }
 
     loadSavedValues() {
@@ -83,26 +417,41 @@ class Go2WebRTCClient {
             return;
         }
 
+        console.log('开始连接流程...');
         this.updateConnectionStatus('connecting', '连接中...');
         this.elements.connectBtn.disabled = true;
         this.elements.connectText.innerHTML = '<span class="loading"></span> 连接中...';
 
         try {
+            console.log('步骤1: 连接到机器人...');
             // 首先连接到机器人
             await this.connectToRobot();
             
+            console.log('步骤2: 建立WebRTC连接...');
             // 然后建立WebRTC连接
             await this.establishWebRTCConnection();
             
+            console.log('连接成功，更新状态...');
+            this.isConnected = true;
+            this.updateConnectionStatus('connected', '已连接');
+            
+            // 更新连接按钮状态
+            console.log('更新按钮状态...');
+            this.elements.connectBtn.style.display = 'none';
+            this.elements.disconnectBtn.style.display = 'inline-block';
+            this.elements.connectText.textContent = '连接机器人';
+            
+            this.enableControlButtons();
+            
+            console.log('步骤3: 开启视频...');
             // 自动开启视频
             await this.openVideo();
             
-            this.isConnected = true;
-            this.updateConnectionStatus('connected', '已连接');
-            this.enableControlButtons();
             this.showNotification('成功连接到机器人，视频已自动开启', 'success');
+            console.log('连接流程完成');
             
         } catch (error) {
+            console.error('连接失败:', error);
             this.log(`连接失败: ${error.message}`, 'error');
             this.updateConnectionStatus('disconnected', '连接失败');
             this.resetConnectionUI();
@@ -377,7 +726,8 @@ class Go2WebRTCClient {
     }
 
     async openVideo() {
-        if (!this.isConnected) {
+        // 在连接过程中也允许调用
+        if (!this.isConnected && !this.robotIP) {
             this.showNotification('请先连接到机器人', 'warning');
             return;
         }
@@ -468,12 +818,17 @@ class Go2WebRTCClient {
     }
 
     updateConnectionStatus(status, text) {
+        console.log('更新连接状态:', status, text);
         this.elements.connectionStatus.className = `connection-status status-${status}`;
         this.elements.statusText.textContent = text;
+        console.log('连接状态元素:', this.elements.connectionStatus);
+        console.log('状态文本元素:', this.elements.statusText);
     }
 
     resetConnectionUI() {
         this.elements.connectBtn.disabled = false;
+        this.elements.connectBtn.style.display = 'inline-block';
+        this.elements.disconnectBtn.style.display = 'none';
         this.elements.connectText.textContent = '连接机器人';
         this.disableControlButtons();
     }
@@ -531,4 +886,30 @@ document.addEventListener('DOMContentLoaded', () => {
     // 添加一些初始日志
     window.webrtcClient.log('Go2 机器人 WebRTC 客户端已加载', 'success');
     window.webrtcClient.log('请输入机器人IP地址和访问令牌，然后点击连接', 'info');
-}); 
+    
+    // 测试摇杆元素是否存在
+    setTimeout(() => {
+        const leftJoystick = document.getElementById('joystick-left');
+        const rightJoystick = document.getElementById('joystick-right');
+        
+        if (leftJoystick) {
+            console.log('左摇杆元素存在:', leftJoystick);
+            const knob = leftJoystick.querySelector('.joystick-knob');
+            const value = leftJoystick.querySelector('.joystick-value');
+            console.log('左摇杆按钮:', knob);
+            console.log('左摇杆数值显示:', value);
+        } else {
+            console.error('左摇杆元素不存在');
+        }
+        
+        if (rightJoystick) {
+            console.log('右摇杆元素存在:', rightJoystick);
+            const knob = rightJoystick.querySelector('.joystick-knob');
+            const value = rightJoystick.querySelector('.joystick-value');
+            console.log('右摇杆按钮:', knob);
+            console.log('右摇杆数值显示:', value);
+        } else {
+            console.error('右摇杆元素不存在');
+        }
+    }, 1000);
+});

@@ -300,11 +300,6 @@ func (proxy *WebRTCProxy) broadcastVideoFrame(connectionID string, rtp rtp.Packe
 			}
 		}
 	}
-
-	// 只在有客户端时记录日志
-	if totalCount > 0 {
-		log.Printf("�� 视频帧广播: %d/%d 客户端成功", successCount, totalCount)
-	}
 }
 
 // handleWebRTCClient 处理WebRTC客户端连接
@@ -480,6 +475,7 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "无效的请求格式", http.StatusBadRequest)
 		return
 	}
+	log.Printf("收到命令请求: %v", req)
 
 	connectionID := proxy.generateConnectionID(req.RobotIP, req.Token)
 
@@ -492,7 +488,6 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 发送命令
 	conn.SendCommand(req.Command, req.Data)
 
 	json.NewEncoder(w).Encode(ProxyResponse{
