@@ -8,6 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"go2-webrtc/gpio"
+
 	"github.com/gorilla/mux"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
@@ -485,6 +487,13 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 
 	if !exists {
 		http.Error(w, "连接不存在", http.StatusNotFound)
+		return
+	}
+
+	if req.Command == "Shoot" {
+		// 创建GPIO控制器并演示高低电平控制
+		gpioCtrl := gpio.NewGPIOController(27)
+		gpioCtrl.Pulse(time.Millisecond * time.Duration(70))
 		return
 	}
 

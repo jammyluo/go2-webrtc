@@ -1,15 +1,22 @@
 module go2-webrtc
 
-go 1.21
+go 1.22.6
+
+toolchain go1.24.5
 
 require (
 	github.com/gorilla/mux v1.8.0
 	github.com/pion/rtp v1.7.13
 	github.com/pion/webrtc/v3 v3.1.49
+	github.com/rs/zerolog v1.34.0
+	periph.io/x/conn/v3 v3.7.2
+	periph.io/x/host/v3 v3.8.5
 )
 
 require (
 	github.com/google/uuid v1.3.0 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.19 // indirect
 	github.com/pion/datachannel v1.5.2 // indirect
 	github.com/pion/dtls/v2 v2.1.5 // indirect
 	github.com/pion/ice/v2 v2.2.12 // indirect
@@ -27,5 +34,5 @@ require (
 	github.com/pion/udp v0.1.1 // indirect
 	golang.org/x/crypto v0.0.0-20221010152910-d6f0a8c073c2 // indirect
 	golang.org/x/net v0.1.0 // indirect
-	golang.org/x/sys v0.1.0 // indirect
+	golang.org/x/sys v0.12.0 // indirect
 )

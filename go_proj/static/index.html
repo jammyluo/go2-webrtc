@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Go2 机器人控制面板</title>
+    <title>Go2 机器人 WebRTC 客户端</title>
     <style>
         * {
             margin: 0;
@@ -151,60 +151,64 @@
             box-shadow: 0 5px 15px rgba(237, 137, 54, 0.4);
         }
 
+        .btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none !important;
+        }
+
         .connection-status {
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
+            display: inline-block;
+            padding: 8px 16px;
+            border-radius: 20px;
             font-weight: 600;
+            margin-bottom: 20px;
         }
 
         .status-connected {
-            background: #c6f6d5;
-            color: #22543d;
-            border: 2px solid #9ae6b4;
-        }
-
-        .status-disconnected {
-            background: #fed7d7;
-            color: #742a2a;
-            border: 2px solid #feb2b2;
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
+            color: white;
         }
 
         .status-connecting {
-            background: #fef5e7;
-            color: #744210;
-            border: 2px solid #fbd38d;
+            background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%);
+            color: white;
         }
 
-        .command-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 10px;
-            margin-top: 20px;
+        .status-disconnected {
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
+            color: white;
         }
 
         .video-container {
             position: relative;
             width: 100%;
             height: 400px;
-            background: #000;
-            border-radius: 10px;
+            border-radius: 12px;
             overflow: hidden;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .video-container video {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
+            background: #000;
         }
 
         .video-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
             color: #666;
             font-size: 1.2rem;
-            text-align: center;
+        }
+
+        .video-placeholder div:first-child {
+            font-size: 4rem;
+            margin-bottom: 20px;
+        }
+
+        #video-stream {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            border-radius: 12px;
         }
 
         .log-container {
@@ -213,73 +217,51 @@
             padding: 25px;
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             backdrop-filter: blur(10px);
-            margin-top: 30px;
         }
 
         .log-content {
-            background: #1a202c;
-            color: #e2e8f0;
-            padding: 15px;
-            border-radius: 8px;
-            height: 200px;
+            height: 300px;
             overflow-y: auto;
+            background: #f7fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 15px;
             font-family: 'Courier New', monospace;
             font-size: 0.9rem;
-            line-height: 1.4;
         }
 
         .log-entry {
-            margin-bottom: 5px;
-            padding: 5px;
-            border-radius: 4px;
+            margin-bottom: 8px;
+            padding: 4px 0;
         }
 
         .log-info {
-            background: rgba(59, 130, 246, 0.1);
-            border-left: 3px solid #3b82f6;
+            color: #3182ce;
         }
 
         .log-success {
-            background: rgba(34, 197, 94, 0.1);
-            border-left: 3px solid #22c55e;
-        }
-
-        .log-error {
-            background: rgba(239, 68, 68, 0.1);
-            border-left: 3px solid #ef4444;
+            color: #38a169;
         }
 
         .log-warning {
-            background: rgba(245, 158, 11, 0.1);
-            border-left: 3px solid #f59e0b;
+            color: #d69e2e;
         }
 
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid #f3f3f3;
-            border-top: 3px solid #667eea;
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .log-error {
+            color: #e53e3e;
         }
 
         .notification {
             position: fixed;
             top: 20px;
             right: 20px;
-            padding: 15px 20px;
+            padding: 15px 25px;
             border-radius: 8px;
             color: white;
             font-weight: 600;
-            z-index: 1000;
-            transform: translateX(400px);
+            transform: translateX(100%);
             transition: transform 0.3s ease;
+            z-index: 1000;
         }
 
         .notification.show {
@@ -287,28 +269,202 @@
         }
 
         .notification-success {
-            background: #48bb78;
+            background: linear-gradient(135deg, #48bb78 0%, #38a169 100%);
         }
 
         .notification-error {
-            background: #f56565;
+            background: linear-gradient(135deg, #f56565 0%, #e53e3e 100%);
         }
 
         .notification-warning {
-            background: #ed8936;
+            background: linear-gradient(135deg, #ed8936 0%, #dd6b20 100%);
         }
 
+        .notification-info {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .loading {
+            display: inline-block;
+            width: 16px;
+            height: 16px;
+            border: 2px solid #ffffff;
+            border-radius: 50%;
+            border-top-color: transparent;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Joystick Styles */
+        .joystick-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e2e8f0;
+        }
+
+        .section-subtitle {
+            font-size: 1.2rem;
+            margin-bottom: 15px;
+            color: #4a5568;
+        }
+
+        .joystick-container {
+            display: flex;
+            justify-content: space-around;
+            gap: 20px;
+        }
+
+        .joystick-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .joystick {
+            width: 150px;
+            height: 150px;
+            border: 2px solid #e2e8f0;
+            border-radius: 50%;
+            position: relative;
+            background: #f7fafc;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+            user-select: none;
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+        }
+
+        .joystick:hover {
+            border-color: #667eea;
+        }
+
+        .joystick-left {
+            border-color: #667eea;
+        }
+
+        .joystick-right {
+            border-color: #48bb78;
+        }
+
+        .joystick-base {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: #e2e8f0;
+            opacity: 0.3;
+            pointer-events: none;
+        }
+
+        .joystick-knob {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: #667eea;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+            pointer-events: none;
+            transition: all 0.1s ease;
+            z-index: 10;
+        }
+
+        .joystick-right .joystick-knob {
+            background: #48bb78;
+            box-shadow: 0 2px 8px rgba(72, 187, 120, 0.4);
+        }
+
+        .joystick-value {
+            position: absolute;
+            bottom: -25px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.6);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 0.8rem;
+            white-space: nowrap;
+            pointer-events: none;
+            z-index: 5;
+        }
+
+        .joystick-label {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            color: #4a5568;
+        }
+
+        .joystick-info {
+            margin-top: 15px;
+            font-size: 0.9rem;
+            color: #666;
+            text-align: center;
+        }
+
+        .joystick-info p {
+            margin: 5px 0;
+        }
+
+        /* 摇杆激活状态 */
+        .joystick.active {
+            border-color: #48bb78;
+            box-shadow: 0 5px 15px rgba(72, 187, 120, 0.3);
+        }
+
+        .joystick.active .joystick-knob {
+            background: #48bb78;
+            box-shadow: 0 2px 8px rgba(72, 187, 120, 0.4);
+        }
+
+        .joystick-left.active {
+            border-color: #667eea;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.3);
+        }
+
+        .joystick-left.active .joystick-knob {
+            background: #667eea;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+        }
+
+        .joystick-right.active {
+            border-color: #48bb78;
+            box-shadow: 0 5px 15px rgba(72, 187, 120, 0.3);
+        }
+
+        .joystick-right.active .joystick-knob {
+            background: #48bb78;
+            box-shadow: 0 2px 8px rgba(72, 187, 120, 0.4);
+        }
+
+        /* 摇杆移动动画 */
+        .joystick-knob {
+            transition: all 0.1s ease;
+        }
+
+        /* 响应式设计 */
         @media (max-width: 768px) {
-            .main-content {
-                grid-template-columns: 1fr;
+            .joystick-container {
+                flex-direction: column;
+                gap: 15px;
             }
-            
-            .header h1 {
-                font-size: 2rem;
+
+            .joystick {
+                width: 120px;
+                height: 120px;
             }
-            
-            .command-grid {
-                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+
+            .joystick-knob {
+                width: 25px;
+                height: 25px;
             }
         }
     </style>
@@ -316,21 +472,17 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🤖 Go2 机器人控制面板</h1>
-            <p>通过WebRTC代理控制机器人和查看视频流</p>
+            <h1>🤖 Go2 机器人 WebRTC 客户端</h1>
+            <p>通过 WebRTC 连接机器人视频流</p>
         </div>
 
         <div class="main-content">
             <div class="control-panel">
-                <h2 class="section-title">🔧 控制面板</h2>
+                <h2 class="section-title">⚙️ 控制面板</h2>
                 
-                <div id="connection-status" class="connection-status status-disconnected">
-                    <span id="status-text">未连接</span>
-                </div>
-
                 <div class="form-group">
                     <label for="robot-ip">机器人IP地址:</label>
-                    <input type="text" id="robot-ip" placeholder="192.168.1.100" value="192.168.1.100">
+                    <input type="text" id="robot-ip" placeholder="例如: 192.168.1.100">
                 </div>
 
                 <div class="form-group">
@@ -339,11 +491,17 @@
                 </div>
 
                 <div class="form-group">
+                    <div class="connection-status status-disconnected" id="connection-status">
+                        <span id="status-text">未连接</span>
+                    </div>
                     <button id="connect-btn" class="btn btn-primary">
                         <span id="connect-text">连接机器人</span>
                     </button>
                     <button id="disconnect-btn" class="btn btn-danger" style="display: none;">
                         断开连接
+                    </button>
+                    <button id="test-status-btn" class="btn btn-warning" style="margin-left: 10px;">
+                        测试状态更新
                     </button>
                 </div>
 
@@ -351,42 +509,12 @@
                     <label for="command-select">机器人命令:</label>
                     <select id="command-select">
                         <option value="">选择命令...</option>
-                        <option value="Damp">阻尼模式</option>
-                        <option value="BalanceStand">平衡站立</option>
-                        <option value="StopMove">停止移动</option>
+                        <option value="Hello">打招呼</option>
+                        <option value="Sit">坐下</option>
                         <option value="StandUp">站立</option>
                         <option value="StandDown">蹲下</option>
-                        <option value="RecoveryStand">恢复站立</option>
-                        <option value="Euler">欧拉角</option>
-                        <option value="Move">移动</option>
-                        <option value="Sit">坐下</option>
-                        <option value="RiseSit">起立坐下</option>
-                        <option value="SwitchGait">切换步态</option>
-                        <option value="Trigger">触发</option>
-                        <option value="BodyHeight">身体高度</option>
-                        <option value="FootRaiseHeight">抬脚高度</option>
-                        <option value="SpeedLevel">速度等级</option>
-                        <option value="Hello">打招呼</option>
-                        <option value="Stretch">伸展</option>
-                        <option value="TrajectoryFollow">轨迹跟随</option>
-                        <option value="ContinuousGait">连续步态</option>
-                        <option value="Content">内容</option>
-                        <option value="Wallow">打滚</option>
-                        <option value="Dance1">舞蹈1</option>
-                        <option value="Dance2">舞蹈2</option>
-                        <option value="GetBodyHeight">获取身体高度</option>
-                        <option value="GetFootRaiseHeight">获取抬脚高度</option>
-                        <option value="GetSpeedLevel">获取速度等级</option>
-                        <option value="SwitchJoystick">切换摇杆</option>
-                        <option value="Pose">姿态</option>
-                        <option value="Scrape">抓挠</option>
-                        <option value="FrontFlip">前空翻</option>
-                        <option value="FrontJump">前跳</option>
-                        <option value="FrontPounce">前扑</option>
-                        <option value="WiggleHips">扭臀</option>
-                        <option value="GetState">获取状态</option>
-                        <option value="EconomicGait">经济步态</option>
-                        <option value="FingerHeart">手指爱心</option>
+                        <option value="StopMove">停止移动</option>
+                        <option value="Shoot">射击</option>
                     </select>
                 </div>
 
@@ -397,7 +525,7 @@
                 </div>
 
                 <div class="form-group">
-                    <button id="open-video-btn" class="btn btn-warning" disabled>
+                    <button id="open-video-btn" class="btn btn-primary" disabled>
                         开启视频
                     </button>
                     <button id="close-video-btn" class="btn btn-danger" disabled>
@@ -405,15 +533,41 @@
                     </button>
                 </div>
 
+                <!-- 摇杆控制区域 -->
+                <div class="joystick-section">
+                    <h3 class="section-subtitle">🎮 移动控制</h3>
+                    <div class="joystick-container">
+                        <div class="joystick-wrapper">
+                            <div id="joystick-left" class="joystick joystick-left">
+                                <div class="joystick-base"></div>
+                                <div class="joystick-knob"></div>
+                                <div class="joystick-value">前后: 0.0 转向: 0.0</div>
+                            </div>
+                            <div class="joystick-label">左摇杆 (前后/转向)</div>
+                        </div>
+                        <div class="joystick-wrapper">
+                            <div id="joystick-right" class="joystick joystick-right">
+                                <div class="joystick-base"></div>
+                                <div class="joystick-knob"></div>
+                                <div class="joystick-value">左右: 0.0 上下: 0.0</div>
+                            </div>
+                            <div class="joystick-label">右摇杆 (左右/上下)</div>
+                        </div>
+                    </div>
+                    <div class="joystick-info">
+                        <p><strong>左摇杆:</strong> 前后移动 / 左右转向</p>
+                        <p><strong>右摇杆:</strong> 左右移动 / 上下移动</p>
+                        <p><strong>键盘控制:</strong> WASD移动, QE转向</p>
+                    </div>
+                </div>
+
                 <div class="command-grid">
                     <button class="btn btn-primary quick-command" data-command="Hello">👋 打招呼</button>
-                    <button class="btn btn-primary quick-command" data-command="Dance1">💃 舞蹈1</button>
-                    <button class="btn btn-primary quick-command" data-command="Dance2">🕺 舞蹈2</button>
                     <button class="btn btn-primary quick-command" data-command="Sit">🪑 坐下</button>
                     <button class="btn btn-primary quick-command" data-command="StandUp">🦵 站立</button>
-                    <button class="btn btn-primary quick-command" data-command="FrontFlip">🤸 前空翻</button>
-                    <button class="btn btn-primary quick-command" data-command="Wallow">🔄 打滚</button>
-                    <button class="btn btn-primary quick-command" data-command="Stretch">🧘 伸展</button>
+                    <button class="btn btn-primary quick-command" data-command="StandDown">🦵 蹲下</button>
+                    <button class="btn btn-primary quick-command" data-command="StopMove">停止移动</button>
+                    <button class="btn btn-primary quick-command" data-command="Shoot">射击</button>
                 </div>
             </div>
 
@@ -424,7 +578,7 @@
                         <div>🎥</div>
                         <div>等待视频流...</div>
                     </div>
-                    <video id="video-stream" style="display: none;" autoplay muted></video>
+                    <video id="video-stream" style="display: none;" autoplay muted controls playsinline></video>
                 </div>
             </div>
         </div>
@@ -437,6 +591,6 @@
 
     <div id="notification" class="notification"></div>
 
-    <script src="app.js"></script>
+    <script src="index.js"></script>
 </body>
 </html> 
