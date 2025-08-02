@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
 )
 
@@ -83,7 +84,7 @@ type Go2Connection struct {
 	// 视频处理相关
 	videoTrack   *webrtc.TrackRemote
 	videoEnabled bool
-	onVideoFrame func(frameData []byte, frameType string, timestamp uint32) // 视频帧回调
+	onVideoFrame func(rtp.Packet) // 视频帧回调
 }
 
 // Message 消息结构体
@@ -185,39 +186,17 @@ func (conn *Go2Connection) handleTrack(remoteTrack *webrtc.TrackRemote, receiver
 	}
 }
 
-// processVideoTrack 处理视频轨道
+// processVideoTrack 处理视频轨道（简化版本，只负责数据传输）
 func (conn *Go2Connection) processVideoTrack(track *webrtc.TrackRemote) {
 	log.Printf("🎬 开始处理视频轨道")
-
-	// 读取RTP包
 	for {
 		rtp, _, err := track.ReadRTP()
 		if err != nil {
 			log.Printf("🎬 读取RTP包失败: %v", err)
 			break
 		}
+		conn.onVideoFrame(*rtp)
 
-		// 调用视频帧回调，传递完整的RTP信息
-		if conn.onVideoFrame != nil {
-			// 创建包含完整RTP信息的视频帧数据
-			frameInfo := map[string]interface{}{
-				"payload":      rtp.Payload,
-				"payload_type": rtp.Header.PayloadType,
-				"timestamp":    rtp.Header.Timestamp,
-				"sequence":     rtp.Header.SequenceNumber,
-				"ssrc":         rtp.Header.SSRC,
-				"marker":       rtp.Header.Marker,
-				"csrc":         rtp.Header.CSRC,
-				"extension":    rtp.Header.Extension,
-				"extension_id": rtp.Header.ExtensionProfile,
-			}
-
-			// 将frameInfo序列化为JSON字符串作为frameType
-			frameTypeJSON, _ := json.Marshal(frameInfo)
-			conn.onVideoFrame(rtp.Payload, string(frameTypeJSON), rtp.Header.Timestamp)
-		}
-
-		// 简单的帧率控制
 		time.Sleep(33 * time.Millisecond) // 约30fps
 	}
 
@@ -225,7 +204,7 @@ func (conn *Go2Connection) processVideoTrack(track *webrtc.TrackRemote) {
 }
 
 // SetVideoFrameCallback 设置视频帧回调函数
-func (conn *Go2Connection) SetVideoFrameCallback(callback func(frameData []byte, frameType string, timestamp uint32)) {
+func (conn *Go2Connection) SetVideoFrameCallback(callback func(rtp.Packet)) {
 	conn.onVideoFrame = callback
 	log.Printf("🎬 视频帧回调已设置")
 }

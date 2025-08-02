@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>简化视频测试</title>
+    <title>简单视频测试</title>
     <style>
         body {
             font-family: Arial, sans-serif;
@@ -66,7 +66,6 @@
             max-width: 100%;
             border-radius: 8px;
             box-shadow: 0 4px 8px rgba(0,0,0,0.2);
-            cursor: pointer;
             border: 2px solid #007bff;
         }
         .log {
@@ -75,40 +74,20 @@
             background: #f8f9fa;
             border: 1px solid #dee2e6;
             border-radius: 4px;
-            height: 200px;
+            height: 300px;
             overflow-y: auto;
             font-family: monospace;
             font-size: 12px;
         }
-        .debug-info {
-            background: #fff3cd;
-            border: 1px solid #ffeaa7;
-            border-radius: 4px;
-            padding: 10px;
-            margin-bottom: 20px;
-        }
-        .test-buttons {
-            margin: 10px 0;
-        }
-        .test-buttons button {
-            margin: 5px;
-            background: #28a745;
-        }
-        .test-buttons button:hover {
-            background: #218838;
-        }
+        .error { color: red; }
+        .success { color: green; }
+        .warning { color: orange; }
+        .info { color: blue; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>🎥 简化视频测试</h1>
-        
-        <div class="debug-info">
-            <h3>📋 测试说明</h3>
-            <p>• 专为测试视频播放功能设计</p>
-            <p>• 简化的连接和播放流程</p>
-            <p>• 多种播放测试方法</p>
-        </div>
+        <h1>🎥 简单视频测试</h1>
         
         <div class="form-group">
             <label for="robot-ip">机器人IP地址:</label>
@@ -122,15 +101,6 @@
         
         <div id="status" class="status disconnected">
             未连接
-        </div>
-        
-        <div class="test-buttons" id="test-buttons" style="display: none;">
-            <h4>🧪 测试按钮</h4>
-            <button id="play-btn">播放视频</button>
-            <button id="pause-btn">暂停视频</button>
-            <button id="mute-btn">静音/取消静音</button>
-            <button id="click-play-btn">点击播放</button>
-            <button id="check-video-btn">检查视频状态</button>
         </div>
         
         <div class="video-container">
@@ -164,24 +134,13 @@
                     status: document.getElementById('status'),
                     videoStream: document.getElementById('video-stream'),
                     videoPlaceholder: document.getElementById('video-placeholder'),
-                    log: document.getElementById('log'),
-                    testButtons: document.getElementById('test-buttons'),
-                    playBtn: document.getElementById('play-btn'),
-                    pauseBtn: document.getElementById('pause-btn'),
-                    muteBtn: document.getElementById('mute-btn'),
-                    clickPlayBtn: document.getElementById('click-play-btn'),
-                    checkVideoBtn: document.getElementById('check-video-btn')
+                    log: document.getElementById('log')
                 };
             }
 
             initEventListeners() {
                 this.elements.connectBtn.addEventListener('click', () => this.connect());
                 this.elements.disconnectBtn.addEventListener('click', () => this.disconnect());
-                this.elements.playBtn.addEventListener('click', () => this.playVideo());
-                this.elements.pauseBtn.addEventListener('click', () => this.pauseVideo());
-                this.elements.muteBtn.addEventListener('click', () => this.toggleMute());
-                this.elements.clickPlayBtn.addEventListener('click', () => this.clickToPlay());
-                this.elements.checkVideoBtn.addEventListener('click', () => this.checkVideoStatus());
             }
 
             async connect() {
@@ -203,10 +162,9 @@
                     await this.establishWebRTCConnection();
                     
                     this.isConnected = true;
-                    this.updateStatus('connected', '已连接 - 测试视频播放');
+                    this.updateStatus('connected', '已连接');
                     this.elements.connectBtn.style.display = 'none';
                     this.elements.disconnectBtn.style.display = 'inline-block';
-                    this.elements.testButtons.style.display = 'block';
                     
                 } catch (error) {
                     this.log(`连接失败: ${error.message}`, 'error');
@@ -268,34 +226,21 @@
 
                 this.log('✅ RTCPeerConnection创建成功', 'success');
 
-                // 设置事件处理
+                // 设置视频轨道处理
                 this.peerConnection.ontrack = (event) => {
                     this.log('🎉 收到视频轨道!', 'success');
                     this.log(`轨道类型: ${event.track.kind}`, 'info');
+                    this.log(`轨道ID: ${event.track.id}`, 'info');
+                    this.log(`轨道状态: ${event.track.readyState}`, 'info');
                     
                     this.elements.videoStream.srcObject = event.streams[0];
                     this.elements.videoPlaceholder.style.display = 'none';
                     this.elements.videoStream.style.display = 'block';
                     
-                    // 监听视频事件
-                    this.elements.videoStream.addEventListener('loadedmetadata', () => {
-                        this.log('✅ 视频元数据已加载', 'success');
-                        this.log(`视频尺寸: ${this.elements.videoStream.videoWidth}x${this.elements.videoStream.videoHeight}`, 'info');
-                    });
+                    // 设置视频事件监听
+                    this.setupVideoEvents();
                     
-                    this.elements.videoStream.addEventListener('canplay', () => {
-                        this.log('✅ 视频可以播放', 'success');
-                    });
-                    
-                    this.elements.videoStream.addEventListener('playing', () => {
-                        this.log('🎬 视频开始播放!', 'success');
-                    });
-                    
-                    this.elements.videoStream.addEventListener('error', (e) => {
-                        this.log(`❌ 视频播放错误: ${e.message}`, 'error');
-                    });
-                    
-                    // 延迟播放
+                    // 尝试播放
                     setTimeout(() => {
                         this.playVideo();
                     }, 1000);
@@ -349,6 +294,43 @@
                 this.log('✅ WebRTC连接建立成功', 'success');
             }
 
+            setupVideoEvents() {
+                const video = this.elements.videoStream;
+                
+                video.addEventListener('loadstart', () => {
+                    this.log('📹 视频开始加载', 'info');
+                });
+                
+                video.addEventListener('loadedmetadata', () => {
+                    this.log('✅ 视频元数据已加载', 'success');
+                    this.log(`视频尺寸: ${video.videoWidth}x${video.videoHeight}`, 'info');
+                });
+                
+                video.addEventListener('loadeddata', () => {
+                    this.log('📹 视频数据已加载', 'info');
+                });
+                
+                video.addEventListener('canplay', () => {
+                    this.log('✅ 视频可以播放', 'success');
+                });
+                
+                video.addEventListener('playing', () => {
+                    this.log('🎬 视频开始播放!', 'success');
+                });
+                
+                video.addEventListener('waiting', () => {
+                    this.log('⏳ 视频等待中...', 'warning');
+                });
+                
+                video.addEventListener('error', (e) => {
+                    this.log(`❌ 视频播放错误: ${e.message}`, 'error');
+                    if (video.error) {
+                        this.log(`错误代码: ${video.error.code}`, 'error');
+                        this.log(`错误消息: ${video.error.message}`, 'error');
+                    }
+                });
+            }
+
             playVideo() {
                 this.log('尝试播放视频...', 'info');
                 if (this.elements.videoStream.srcObject) {
@@ -356,51 +338,10 @@
                         this.log('✅ 视频播放成功', 'success');
                     }).catch(e => {
                         this.log(`❌ 视频播放失败: ${e.message}`, 'error');
+                        this.log('可能需要用户交互才能播放', 'warning');
                     });
                 } else {
                     this.log('⚠️ 没有视频流可播放', 'warning');
-                }
-            }
-
-            pauseVideo() {
-                this.log('暂停视频...', 'info');
-                this.elements.videoStream.pause();
-            }
-
-            toggleMute() {
-                this.log('切换静音状态...', 'info');
-                this.elements.videoStream.muted = !this.elements.videoStream.muted;
-                this.log(`静音状态: ${this.elements.videoStream.muted}`, 'info');
-            }
-
-            clickToPlay() {
-                this.log('模拟点击播放...', 'info');
-                // 模拟用户点击
-                this.elements.videoStream.click();
-                // 然后尝试播放
-                setTimeout(() => {
-                    this.playVideo();
-                }, 100);
-            }
-
-            checkVideoStatus() {
-                this.log('检查视频状态...', 'info');
-                this.log(`srcObject: ${this.elements.videoStream.srcObject ? '有' : '无'}`, 'info');
-                this.log(`readyState: ${this.elements.videoStream.readyState}`, 'info');
-                this.log(`networkState: ${this.elements.videoStream.networkState}`, 'info');
-                this.log(`paused: ${this.elements.videoStream.paused}`, 'info');
-                this.log(`muted: ${this.elements.videoStream.muted}`, 'info');
-                this.log(`currentTime: ${this.elements.videoStream.currentTime}`, 'info');
-                this.log(`duration: ${this.elements.videoStream.duration}`, 'info');
-                this.log(`videoWidth: ${this.elements.videoStream.videoWidth}`, 'info');
-                this.log(`videoHeight: ${this.elements.videoStream.videoHeight}`, 'info');
-                
-                if (this.elements.videoStream.srcObject) {
-                    const tracks = this.elements.videoStream.srcObject.getTracks();
-                    this.log(`轨道数量: ${tracks.length}`, 'info');
-                    tracks.forEach((track, index) => {
-                        this.log(`轨道 ${index}: ${track.kind} - ${track.id} - ${track.readyState}`, 'info');
-                    });
                 }
             }
 
@@ -414,7 +355,6 @@
                 this.updateStatus('disconnected', '已断开连接');
                 this.elements.connectBtn.style.display = 'inline-block';
                 this.elements.disconnectBtn.style.display = 'none';
-                this.elements.testButtons.style.display = 'none';
                 this.elements.connectBtn.disabled = false;
                 this.elements.videoPlaceholder.style.display = 'block';
                 this.elements.videoStream.style.display = 'none';
@@ -429,7 +369,7 @@
             log(message, type = 'info') {
                 const timestamp = new Date().toLocaleTimeString();
                 const logEntry = document.createElement('div');
-                logEntry.style.color = type === 'error' ? 'red' : type === 'success' ? 'green' : 'blue';
+                logEntry.className = type;
                 logEntry.textContent = `[${timestamp}] ${message}`;
                 
                 this.elements.log.appendChild(logEntry);
@@ -444,7 +384,7 @@
         // 页面加载完成后初始化
         document.addEventListener('DOMContentLoaded', () => {
             window.simpleVideoTest = new SimpleVideoTest();
-            window.simpleVideoTest.log('简化视频测试工具已加载', 'success');
+            window.simpleVideoTest.log('简单视频测试工具已加载', 'success');
         });
     </script>
 </body>

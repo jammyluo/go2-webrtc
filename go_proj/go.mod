@@ -5,6 +5,7 @@ go 1.21
 require (
 	github.com/gorilla/mux v1.8.0
 	github.com/gorilla/websocket v1.5.3
+	github.com/pion/rtp v1.7.13
 	github.com/pion/webrtc/v3 v3.1.49
 )
 
@@ -18,7 +19,6 @@ require (
 	github.com/pion/mdns v0.0.5 // indirect
 	github.com/pion/randutil v0.1.0 // indirect
 	github.com/pion/rtcp v1.2.10 // indirect
-	github.com/pion/rtp v1.7.13 // indirect
 	github.com/pion/sctp v1.8.3 // indirect
 	github.com/pion/sdp/v3 v3.0.6 // indirect
 	github.com/pion/srtp/v2 v2.0.10 // indirect

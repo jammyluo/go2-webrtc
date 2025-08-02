@@ -1,0 +1,451 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GO2 虚拟手柄控制</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #1a1a1a;
+            color: white;
+        }
+        
+        .container {
+            display: flex;
+            justify-content: space-between;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .joystick-container {
+            text-align: center;
+            margin: 20px;
+        }
+        
+        .joystick {
+            border: 2px solid #333;
+            border-radius: 50%;
+            position: relative;
+            margin: 20px auto;
+            background: #2a2a2a;
+        }
+        
+        .joystick-knob {
+            position: absolute;
+            width: 30px;
+            height: 30px;
+            background: #ff4444;
+            border-radius: 50%;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .joystick-knob:hover {
+            background: #ff6666;
+        }
+        
+        .button {
+            width: 60px;
+            height: 60px;
+            border-radius: 50%;
+            border: none;
+            margin: 10px;
+            font-size: 18px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .btn-a { background: #4CAF50; color: white; }
+        .btn-b { background: #f44336; color: white; }
+        .btn-x { background: #2196F3; color: white; }
+        .btn-y { background: #FF9800; color: white; }
+        
+        .button:hover {
+            transform: scale(1.1);
+        }
+        
+        .button:active {
+            transform: scale(0.95);
+        }
+        
+        .status {
+            background: #333;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: monospace;
+        }
+        
+        .connection-form {
+            background: #333;
+            padding: 20px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+        
+        .connection-form input {
+            padding: 8px;
+            margin: 5px;
+            border: none;
+            border-radius: 3px;
+            background: #444;
+            color: white;
+        }
+        
+        .connection-form button {
+            padding: 8px 16px;
+            background: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+        }
+        
+        .connection-form button:hover {
+            background: #45a049;
+        }
+        
+        .controls-info {
+            background: #333;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="left-panel">
+            <div class="connection-form">
+                <h3>机器人连接</h3>
+                <input type="text" id="robotIP" placeholder="机器人IP地址" value="192.168.1.1">
+                <input type="text" id="robotToken" placeholder="安全令牌">
+                <button onclick="connectRobot()">连接</button>
+                <button onclick="disconnectRobot()">断开</button>
+            </div>
+            
+            <div class="status" id="status">
+                状态: 未连接
+            </div>
+            
+            <div class="controls-info">
+                <h3>控制说明</h3>
+                <p><strong>左摇杆:</strong> 前后左右移动</p>
+                <p><strong>右摇杆:</strong> 旋转控制</p>
+                <p><strong>A按钮:</strong> 站立</p>
+                <p><strong>B按钮:</strong> 坐下</p>
+                <p><strong>X按钮:</strong> 坐下</p>
+                <p><strong>Y按钮:</strong> 打招呼</p>
+            </div>
+        </div>
+        
+        <div class="right-panel">
+            <div class="joystick-container">
+                <h3>左摇杆 (移动)</h3>
+                <div class="joystick" id="leftJoystick" style="width: 150px; height: 150px;">
+                    <div class="joystick-knob" id="leftKnob"></div>
+                </div>
+                <div id="leftValues">X: 0.00, Y: 0.00</div>
+            </div>
+            
+            <div class="joystick-container">
+                <h3>右摇杆 (旋转)</h3>
+                <div class="joystick" id="rightJoystick" style="width: 150px; height: 150px;">
+                    <div class="joystick-knob" id="rightKnob"></div>
+                </div>
+                <div id="rightValues">X: 0.00, Y: 0.00</div>
+            </div>
+            
+            <div class="joystick-container">
+                <h3>按钮</h3>
+                <button class="button btn-a" id="btnA">A</button>
+                <button class="button btn-b" id="btnB">B</button>
+                <button class="button btn-x" id="btnX">X</button>
+                <button class="button btn-y" id="btnY">Y</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="go2webrtc.js" type="module"></script>
+    <script>
+        // 虚拟手柄状态
+        let joystickState = {
+            leftX: 0,
+            leftY: 0,
+            rightX: 0,
+            rightY: 0,
+            btnA: false,
+            btnB: false,
+            btnX: false,
+            btnY: false
+        };
+        
+        let rtc = null;
+        let isConnected = false;
+        
+        // 摇杆类
+        class Joystick {
+            constructor(container, knob, valuesDisplay) {
+                this.container = container;
+                this.knob = knob;
+                this.valuesDisplay = valuesDisplay;
+                this.isDragging = false;
+                this.centerX = 0;
+                this.centerY = 0;
+                this.radius = 0;
+                this.valueX = 0;
+                this.valueY = 0;
+                
+                this.init();
+            }
+            
+            init() {
+                const rect = this.container.getBoundingClientRect();
+                this.centerX = rect.width / 2;
+                this.centerY = rect.height / 2;
+                this.radius = rect.width / 2 - 20;
+                
+                this.container.addEventListener('mousedown', this.onMouseDown.bind(this));
+                document.addEventListener('mousemove', this.onMouseMove.bind(this));
+                document.addEventListener('mouseup', this.onMouseUp.bind(this));
+                
+                // 触摸支持
+                this.container.addEventListener('touchstart', this.onTouchStart.bind(this));
+                document.addEventListener('touchmove', this.onTouchMove.bind(this));
+                document.addEventListener('touchend', this.onTouchEnd.bind(this));
+            }
+            
+            onMouseDown(e) {
+                this.isDragging = true;
+                this.updatePosition(e.clientX, e.clientY);
+            }
+            
+            onMouseMove(e) {
+                if (this.isDragging) {
+                    this.updatePosition(e.clientX, e.clientY);
+                }
+            }
+            
+            onMouseUp() {
+                this.isDragging = false;
+                this.resetPosition();
+            }
+            
+            onTouchStart(e) {
+                e.preventDefault();
+                this.isDragging = true;
+                const touch = e.touches[0];
+                this.updatePosition(touch.clientX, touch.clientY);
+            }
+            
+            onTouchMove(e) {
+                e.preventDefault();
+                if (this.isDragging) {
+                    const touch = e.touches[0];
+                    this.updatePosition(touch.clientX, touch.clientY);
+                }
+            }
+            
+            onTouchEnd() {
+                this.isDragging = false;
+                this.resetPosition();
+            }
+            
+            updatePosition(clientX, clientY) {
+                const rect = this.container.getBoundingClientRect();
+                const x = clientX - rect.left - this.centerX;
+                const y = clientY - rect.top - this.centerY;
+                
+                const distance = Math.sqrt(x * x + y * y);
+                
+                if (distance <= this.radius) {
+                    this.valueX = x / this.radius;
+                    this.valueY = y / this.radius;
+                } else {
+                    const angle = Math.atan2(y, x);
+                    this.valueX = Math.cos(angle);
+                    this.valueY = Math.sin(angle);
+                }
+                
+                this.updateKnobPosition();
+                this.updateDisplay();
+            }
+            
+            resetPosition() {
+                this.valueX = 0;
+                this.valueY = 0;
+                this.updateKnobPosition();
+                this.updateDisplay();
+            }
+            
+            updateKnobPosition() {
+                const x = this.centerX + this.valueX * this.radius * 0.7;
+                const y = this.centerY + this.valueY * this.radius * 0.7;
+                this.knob.style.left = x + 'px';
+                this.knob.style.top = y + 'px';
+            }
+            
+            updateDisplay() {
+                this.valuesDisplay.textContent = `X: ${this.valueX.toFixed(2)}, Y: ${this.valueY.toFixed(2)}`;
+            }
+            
+            getValues() {
+                return { x: this.valueX, y: this.valueY };
+            }
+        }
+        
+        // 初始化摇杆
+        const leftJoystick = new Joystick(
+            document.getElementById('leftJoystick'),
+            document.getElementById('leftKnob'),
+            document.getElementById('leftValues')
+        );
+        
+        const rightJoystick = new Joystick(
+            document.getElementById('rightJoystick'),
+            document.getElementById('rightKnob'),
+            document.getElementById('rightValues')
+        );
+        
+        // 按钮事件
+        document.getElementById('btnA').addEventListener('mousedown', () => joystickState.btnA = true);
+        document.getElementById('btnA').addEventListener('mouseup', () => joystickState.btnA = false);
+        document.getElementById('btnB').addEventListener('mousedown', () => joystickState.btnB = true);
+        document.getElementById('btnB').addEventListener('mouseup', () => joystickState.btnB = false);
+        document.getElementById('btnX').addEventListener('mousedown', () => joystickState.btnX = true);
+        document.getElementById('btnX').addEventListener('mouseup', () => joystickState.btnX = false);
+        document.getElementById('btnY').addEventListener('mousedown', () => joystickState.btnY = true);
+        document.getElementById('btnY').addEventListener('mouseup', () => joystickState.btnY = false);
+        
+        // 触摸按钮支持
+        document.getElementById('btnA').addEventListener('touchstart', (e) => { e.preventDefault(); joystickState.btnA = true; });
+        document.getElementById('btnA').addEventListener('touchend', () => joystickState.btnA = false);
+        document.getElementById('btnB').addEventListener('touchstart', (e) => { e.preventDefault(); joystickState.btnB = true; });
+        document.getElementById('btnB').addEventListener('touchend', () => joystickState.btnB = false);
+        document.getElementById('btnX').addEventListener('touchstart', (e) => { e.preventDefault(); joystickState.btnX = true; });
+        document.getElementById('btnX').addEventListener('touchend', () => joystickState.btnX = false);
+        document.getElementById('btnY').addEventListener('touchstart', (e) => { e.preventDefault(); joystickState.btnY = true; });
+        document.getElementById('btnY').addEventListener('touchend', () => joystickState.btnY = false);
+        
+        // 连接机器人
+        function connectRobot() {
+            const ip = document.getElementById('robotIP').value;
+            const token = document.getElementById('robotToken').value;
+            
+            if (!ip) {
+                alert('请输入机器人IP地址');
+                return;
+            }
+            
+            try {
+                rtc = new Go2WebRTC(token, ip, handleMessage);
+                rtc.initSDP();
+                updateStatus('正在连接...');
+            } catch (error) {
+                updateStatus('连接失败: ' + error.message);
+            }
+        }
+        
+        // 断开连接
+        function disconnectRobot() {
+            if (rtc) {
+                rtc = null;
+                isConnected = false;
+                updateStatus('已断开连接');
+            }
+        }
+        
+        // 处理消息
+        function handleMessage(data) {
+            console.log('收到消息:', data);
+        }
+        
+        // 更新状态
+        function updateStatus(message) {
+            document.getElementById('status').textContent = '状态: ' + message;
+        }
+        
+        // 发送机器人命令
+        function sendRobotCommand(cmd) {
+            if (rtc && isConnected) {
+                rtc.publish("rt/api/sport/request", cmd);
+            }
+        }
+        
+        // 生成移动命令
+        function genMoveCommand(x, y, z) {
+            return {
+                header: { 
+                    identity: { 
+                        id: Math.floor(Date.now() % 2147483648) + Math.floor(Math.random() * 1000), 
+                        api_id: 1008 
+                    } 
+                },
+                parameter: JSON.stringify({x: x * 0.2, y: y * 0.2, z: z * 0.2})
+            };
+        }
+        
+        // 生成按钮命令
+        function genButtonCommand(apiId) {
+            return {
+                header: { 
+                    identity: { 
+                        id: Math.floor(Date.now() % 2147483648) + Math.floor(Math.random() * 1000), 
+                        api_id: apiId 
+                    } 
+                },
+                parameter: JSON.stringify(apiId)
+            };
+        }
+        
+        // 主控制循环
+        setInterval(() => {
+            if (!rtc || !isConnected) return;
+            
+            const leftValues = leftJoystick.getValues();
+            const rightValues = rightJoystick.getValues();
+            
+            // 更新状态
+            joystickState.leftX = leftValues.x;
+            joystickState.leftY = leftValues.y;
+            joystickState.rightX = rightValues.x;
+            joystickState.rightY = rightValues.y;
+            
+            // 发送移动命令
+            if (Math.abs(leftValues.x) > 0.01 || Math.abs(leftValues.y) > 0.01 || Math.abs(rightValues.x) > 0.01) {
+                sendRobotCommand(genMoveCommand(leftValues.x, leftValues.y, rightValues.x));
+            }
+            
+            // 发送按钮命令
+            if (joystickState.btnA) {
+                sendRobotCommand(genButtonCommand(1004)); // StandUp
+            }
+            if (joystickState.btnB) {
+                sendRobotCommand(genButtonCommand(1005)); // StandDown
+            }
+            if (joystickState.btnX) {
+                sendRobotCommand(genButtonCommand(1009)); // Sit
+            }
+            if (joystickState.btnY) {
+                sendRobotCommand(genButtonCommand(1016)); // Hello
+            }
+        }, 100);
+        
+        // 全局消息处理
+        window.logMessage = function(message) {
+            console.log(message);
+            if (message.includes('WebRTC connection established')) {
+                isConnected = true;
+                updateStatus('已连接');
+            }
+        };
+    </script>
+</body>
+</html> 
