@@ -99,37 +99,51 @@ func NewWebRTCClient(id string, robotConn *Go2Connection) *WebRTCClient {
 	// 设置连接状态变化回调
 	peerConnection.OnConnectionStateChange(func(s webrtc.PeerConnectionState) {
 		log.Printf("🎉 WebRTC客户端 %s 连接状态变化: %s", id, s.String())
-		if s == webrtc.PeerConnectionStateConnected {
+		switch s {
+		case webrtc.PeerConnectionStateConnected:
 			log.Printf("🎉 WebRTC客户端 %s 连接成功！", id)
-		} else if s == webrtc.PeerConnectionStateFailed {
+		case webrtc.PeerConnectionStateFailed:
 			log.Printf("❌ WebRTC客户端 %s 连接失败", id)
-		} else if s == webrtc.PeerConnectionStateNew {
+			// 连接失败时清理客户端
+			if client.onClose != nil {
+				client.onClose()
+			}
+		case webrtc.PeerConnectionStateNew:
 			log.Printf("🆕 WebRTC客户端 %s 连接新建状态", id)
-		} else if s == webrtc.PeerConnectionStateConnecting {
+		case webrtc.PeerConnectionStateConnecting:
 			log.Printf("🔄 WebRTC客户端 %s 连接中...", id)
-		} else if s == webrtc.PeerConnectionStateDisconnected {
+		case webrtc.PeerConnectionStateDisconnected:
 			log.Printf("🔌 WebRTC客户端 %s 连接断开", id)
-		} else if s == webrtc.PeerConnectionStateClosed {
+			// 连接断开时清理客户端
+			if client.onClose != nil {
+				client.onClose()
+			}
+		case webrtc.PeerConnectionStateClosed:
 			log.Printf("🔒 WebRTC客户端 %s 连接已关闭", id)
+			// 连接关闭时清理客户端
+			if client.onClose != nil {
+				client.onClose()
+			}
 		}
 	})
 
 	// 设置ICE连接状态变化回调
 	peerConnection.OnICEConnectionStateChange(func(s webrtc.ICEConnectionState) {
 		log.Printf("🎉 WebRTC客户端 %s ICE连接状态变化: %s", id, s.String())
-		if s == webrtc.ICEConnectionStateConnected {
+		switch s {
+		case webrtc.ICEConnectionStateConnected:
 			log.Printf("🎉 WebRTC客户端 %s ICE连接成功！", id)
-		} else if s == webrtc.ICEConnectionStateFailed {
+		case webrtc.ICEConnectionStateFailed:
 			log.Printf("❌ WebRTC客户端 %s ICE连接失败，但继续处理视频流（本地网络）", id)
-		} else if s == webrtc.ICEConnectionStateChecking {
+		case webrtc.ICEConnectionStateChecking:
 			log.Printf("🔍 WebRTC客户端 %s ICE连接检查中...", id)
-		} else if s == webrtc.ICEConnectionStateNew {
+		case webrtc.ICEConnectionStateNew:
 			log.Printf("🆕 WebRTC客户端 %s ICE连接新建状态", id)
-		} else if s == webrtc.ICEConnectionStateCompleted {
+		case webrtc.ICEConnectionStateCompleted:
 			log.Printf("✅ WebRTC客户端 %s ICE连接完成！", id)
-		} else if s == webrtc.ICEConnectionStateDisconnected {
+		case webrtc.ICEConnectionStateDisconnected:
 			log.Printf("🔌 WebRTC客户端 %s ICE连接断开", id)
-		} else if s == webrtc.ICEConnectionStateClosed {
+		case webrtc.ICEConnectionStateClosed:
 			log.Printf("🔒 WebRTC客户端 %s ICE连接已关闭", id)
 		}
 	})
@@ -502,6 +516,30 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 	})
 }
 
+// cleanupDisconnectedClients 清理断开的客户端
+func (proxy *WebRTCProxy) cleanupDisconnectedClients() {
+	proxy.mutex.Lock()
+	defer proxy.mutex.Unlock()
+
+	cleanedCount := 0
+	for clientID, client := range proxy.clients {
+		if client.peerConnection != nil {
+			state := client.peerConnection.ConnectionState()
+			if state == webrtc.PeerConnectionStateFailed ||
+				state == webrtc.PeerConnectionStateClosed ||
+				state == webrtc.PeerConnectionStateDisconnected {
+				delete(proxy.clients, clientID)
+				cleanedCount++
+				log.Printf("🧹 清理断开的WebRTC客户端: %s (状态: %s)", clientID, state.String())
+			}
+		}
+	}
+
+	if cleanedCount > 0 {
+		log.Printf("🧹 清理了 %d 个断开的WebRTC客户端", cleanedCount)
+	}
+}
+
 // Start 启动代理服务器
 func (proxy *WebRTCProxy) Start(port string) {
 	router := mux.NewRouter()
@@ -517,6 +555,15 @@ func (proxy *WebRTCProxy) Start(port string) {
 
 	// 静态文件服务
 	router.PathPrefix("/").Handler(http.FileServer(http.Dir("static")))
+
+	// 启动定期清理任务
+	go func() {
+		ticker := time.NewTicker(30 * time.Second) // 每30秒清理一次
+		defer ticker.Stop()
+		for range ticker.C {
+			proxy.cleanupDisconnectedClients()
+		}
+	}()
 
 	log.Printf("WebRTC代理服务器启动在端口 %s", port)
 	log.Fatal(http.ListenAndServe(":"+port, router))
