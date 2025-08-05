@@ -5,6 +5,7 @@ class Go2WebRTCClient {
         this.token = '';
         this.isConnected = false;
         this.peerConnection = null;
+        this.dataChannel = null;
         this.clientID = null;
         this.reconnecting = false; // 新增重连状态
         
@@ -308,40 +309,20 @@ class Go2WebRTCClient {
     async sendMovementCommand(x, y, z) {
         console.log('sendMovementCommand 被调用:', { x, y, z });
         
-        if (!this.isConnected) {
-            console.log('未连接到机器人，跳过发送移动命令');
+        if (!this.isConnected || !this.dataChannel) {
+            console.log('未连接到机器人或数据通道未就绪，跳过发送移动命令');
             return;
         }
 
         try {
-            console.log('准备发送移动命令到API...');
-            const response = await fetch('/api/command', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    robot_ip: this.robotIP,
-                    token: this.token,
-                    command: 'Move',
-                    data: { x, y, z }
-                })
-            });
-
-            console.log('API响应状态:', response.status);
-
-            if (!response.ok) {
-                throw new Error('发送移动命令失败');
-            }
-
-            const result = await response.json();
-            console.log('API响应结果:', result);
+            const message = {
+                action: 'command',
+                command: 'Move',
+                data: { x, y, z }
+            };
             
-            if (!result.success) {
-                throw new Error(result.message);
-            }
-            
-            console.log('移动命令发送成功');
+            this.dataChannel.send(JSON.stringify(message));
+            console.log('移动命令已通过数据通道发送');
         } catch (error) {
             console.error('移动命令发送失败:', error);
             this.log(`移动命令发送失败: ${error.message}`, 'error');
@@ -423,12 +404,8 @@ class Go2WebRTCClient {
         this.elements.connectText.innerHTML = '<span class="loading"></span> 连接中...';
 
         try {
-            console.log('步骤1: 连接到机器人...');
-            // 首先连接到机器人
-            await this.connectToRobot();
-            
-            console.log('步骤2: 建立WebRTC连接...');
-            // 然后建立WebRTC连接
+            console.log('步骤1: 建立WebRTC连接...');
+            // 建立WebRTC连接
             await this.establishWebRTCConnection();
             
             console.log('连接成功，更新状态...');
@@ -443,7 +420,7 @@ class Go2WebRTCClient {
             
             this.enableControlButtons();
             
-            console.log('步骤3: 开启视频...');
+            console.log('步骤2: 开启视频...');
             // 自动开启视频
             await this.openVideo();
             
@@ -459,39 +436,16 @@ class Go2WebRTCClient {
         }
     }
 
-    async connectToRobot() {
-        const response = await fetch('/api/connect', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                robot_ip: this.robotIP,
-                token: this.token
-            })
-        });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            throw new Error(`连接机器人失败: ${errorText}`);
-        }
-
-        const result = await response.json();
-        if (!result.success) {
-            throw new Error(result.message);
-        }
-
-        this.log('机器人连接成功', 'success');
-    }
-
     async establishWebRTCConnection() {
         this.log('开始建立WebRTC连接...', 'info');
         
         // 获取WebRTC客户端连接
-        const clientUrl = `/webrtc/client?robot_ip=${encodeURIComponent(this.robotIP)}&token=${encodeURIComponent(this.token)}`;
+        const clientUrl = `/webrtc/client?ucode=Go2_001`;
         this.log(`请求WebRTC客户端: ${clientUrl}`, 'info');
         
-        const clientResponse = await fetch(clientUrl);
+        const clientResponse = await fetch(clientUrl, {
+            method: 'POST'
+        });
         
         if (!clientResponse.ok) {
             const errorText = await clientResponse.text();
@@ -516,6 +470,39 @@ class Go2WebRTCClient {
         });
 
         this.log('RTCPeerConnection创建成功（本地模式）', 'info');
+
+        // 设置数据通道事件处理
+        this.peerConnection.ondatachannel = (event) => {
+            this.dataChannel = event.channel;
+            this.log('收到数据通道', 'success');
+            
+            this.dataChannel.onopen = () => {
+                this.log('数据通道已打开', 'success');
+            };
+            
+            this.dataChannel.onclose = () => {
+                this.log('数据通道已关闭', 'warning');
+            };
+            
+            this.dataChannel.onmessage = (event) => {
+                try {
+                    const response = JSON.parse(event.data);
+                    this.log(`收到数据通道消息: ${JSON.stringify(response)}`, 'info');
+                    
+                    if (response.success) {
+                        this.log(`操作成功: ${response.message}`, 'success');
+                    } else {
+                        this.log(`操作失败: ${response.message}`, 'error');
+                    }
+                } catch (error) {
+                    this.log(`解析数据通道消息失败: ${error.message}`, 'error');
+                }
+            };
+            
+            this.dataChannel.onerror = (error) => {
+                this.log(`数据通道错误: ${error.message}`, 'error');
+            };
+        };
 
         // 设置事件处理
         this.peerConnection.ontrack = (event) => {
@@ -635,11 +622,19 @@ class Go2WebRTCClient {
     }
 
     disconnect() {
+        if (this.dataChannel) {
+            const message = {
+                action: 'disconnect'
+            };
+            this.dataChannel.send(JSON.stringify(message));
+        }
+        
         if (this.peerConnection) {
             this.peerConnection.close();
             this.peerConnection = null;
         }
         
+        this.dataChannel = null;
         this.isConnected = false;
         this.updateConnectionStatus('disconnected', '已断开连接');
         this.resetConnectionUI();
@@ -657,30 +652,21 @@ class Go2WebRTCClient {
             this.showNotification('请先连接到机器人', 'warning');
             return;
         }
+        
+        if (!this.dataChannel) {
+            this.showNotification('数据通道未连接', 'error');
+            return;
+        }
+        
         try {
-            const response = await fetch('/api/command', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    robot_ip: this.robotIP,
-                    token: this.token,
-                    command: command
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('发送命令失败');
-            }
-
-            const result = await response.json();
-            if (result.success) {
-                this.log(`发送命令: ${command}`, 'success');
-                this.showNotification('命令发送成功', 'success');
-            } else {
-                throw new Error(result.message);
-            }
+            const message = {
+                action: 'command',
+                command: command
+            };
+            
+            this.dataChannel.send(JSON.stringify(message));
+            this.log(`发送命令: ${command}`, 'success');
+            this.showNotification('命令发送成功', 'success');
         } catch (error) {
             this.log(`发送命令失败: ${error.message}`, 'error');
             this.showNotification(`发送命令失败: ${error.message}`, 'error');
@@ -693,30 +679,20 @@ class Go2WebRTCClient {
             return;
         }
 
+        if (!this.dataChannel) {
+            this.showNotification('数据通道未连接', 'error');
+            return;
+        }
+
         try {
-            const response = await fetch('/api/command', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    robot_ip: this.robotIP,
-                    token: this.token,
-                    command: command
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('发送命令失败');
-            }
-
-            const result = await response.json();
-            if (result.success) {
-                this.log(`发送快速命令: ${command}`, 'success');
-                this.showNotification(`已发送命令: ${command}`, 'success');
-            } else {
-                throw new Error(result.message);
-            }
+            const message = {
+                action: 'command',
+                command: command
+            };
+            
+            this.dataChannel.send(JSON.stringify(message));
+            this.log(`发送快速命令: ${command}`, 'success');
+            this.showNotification(`已发送命令: ${command}`, 'success');
         } catch (error) {
             this.log(`发送快速命令失败: ${error.message}`, 'error');
             this.showNotification(`发送命令失败: ${error.message}`, 'error');
@@ -731,28 +707,17 @@ class Go2WebRTCClient {
         }
 
         try {
-            const response = await fetch('/api/video', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    robot_ip: this.robotIP,
-                    token: this.token,
-                    command: 'open'
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('开启视频失败');
-            }
-
-            const result = await response.json();
-            if (result.success) {
+            // 通过数据通道发送开启视频命令
+            if (this.dataChannel) {
+                const message = {
+                    action: 'command',
+                    command: 'openVideo'
+                };
+                this.dataChannel.send(JSON.stringify(message));
                 this.log('开启视频流', 'success');
                 this.showNotification('视频已开启', 'success');
             } else {
-                throw new Error(result.message);
+                this.log('数据通道未连接，无法开启视频', 'warning');
             }
         } catch (error) {
             this.log(`开启视频失败: ${error.message}`, 'error');
@@ -767,29 +732,18 @@ class Go2WebRTCClient {
         }
 
         try {
-            const response = await fetch('/api/video', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    robot_ip: this.robotIP,
-                    token: this.token,
-                    command: 'close'
-                })
-            });
-
-            if (!response.ok) {
-                throw new Error('关闭视频失败');
-            }
-
-            const result = await response.json();
-            if (result.success) {
+            // 通过数据通道发送关闭视频命令
+            if (this.dataChannel) {
+                const message = {
+                    action: 'command',
+                    command: 'closeVideo'
+                };
+                this.dataChannel.send(JSON.stringify(message));
                 this.log('关闭视频流', 'info');
                 this.hideVideo();
                 this.showNotification('视频已关闭', 'success');
             } else {
-                throw new Error(result.message);
+                this.log('数据通道未连接，无法关闭视频', 'warning');
             }
         } catch (error) {
             this.log(`关闭视频失败: ${error.message}`, 'error');

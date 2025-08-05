@@ -1,5 +1,7 @@
 {
   "default_robot_ip": "192.168.123.161",
+  "default_robot_token": "",
+  "default_robot_ucode": "Go2_001",
   "run_mode": "mock",
   "webrtc": {
     "ice_servers": [
