@@ -45,7 +45,7 @@ type ProxyRequest struct {
 	Action   string      `json:"action"`
 	RobotIP  string      `json:"robot_ip"`
 	Token    string      `json:"token"`
-	NCode    string      `json:"ncode"`
+	UCode    string      `json:"ucode"`
 	Command  string      `json:"command,omitempty"`
 	Data     interface{} `json:"data,omitempty"`
 	ClientID string      `json:"client_id,omitempty"`
@@ -244,18 +244,18 @@ func (client *WebRTCClient) Close() error {
 	return nil
 }
 
-func (proxy *WebRTCProxy) connectGo2(robotIP, token, ncode string) error {
+func (proxy *WebRTCProxy) connectGo2(robotIP, token, ucode string) error {
 	// 使用配置中的默认机器人IP
 	robotIP = proxy.config.GetRobotIP(robotIP)
 	token = proxy.config.GetDefaultToken(token)
-	ncode = proxy.config.GetDefaultNCode(ncode)
+	ucode = proxy.config.GetDefaultUCode(ucode)
 
 	proxy.mutex.Lock()
 	defer proxy.mutex.Unlock()
 
 	// 检查是否已存在连接
-	if _, exists := proxy.connections[ncode]; exists {
-		log.Printf("connect Go2 失败: %s", ncode)
+	if _, exists := proxy.connections[ucode]; exists {
+		log.Printf("connect Go2 失败: %s", ucode)
 		return nil
 	}
 
@@ -263,13 +263,13 @@ func (proxy *WebRTCProxy) connectGo2(robotIP, token, ncode string) error {
 	if proxy.config.RunMode == "mock" {
 		conn = NewMockConn(
 			func() {
-				log.Printf("PROXY 机器人验证成功: %s", ncode)
+				log.Printf("PROXY 机器人验证成功: %s", ucode)
 			},
 			func(message interface{}, msgObj interface{}) {
 				log.Printf("PROXY 收到消息: %v", message)
 			},
 			func() {
-				log.Printf("PROXY 数据通道已打开: %s", ncode)
+				log.Printf("PROXY 数据通道已打开: %s", ucode)
 			},
 			func(sample media.Sample) error {
 				return proxy.broadcastVideoWriteSample(sample)
@@ -279,13 +279,13 @@ func (proxy *WebRTCProxy) connectGo2(robotIP, token, ncode string) error {
 		// 创建新的机器人连接
 		conn = NewGo2Connection(
 			func() {
-				log.Printf("PROXY 机器人验证成功: %s", ncode)
+				log.Printf("PROXY 机器人验证成功: %s", ucode)
 			},
 			func(message interface{}, msgObj interface{}) {
 				log.Printf("PROXY 收到消息: %v", message)
 			},
 			func() {
-				log.Printf("PROXY 数据通道已打开: %s", ncode)
+				log.Printf("PROXY 数据通道已打开: %s", ucode)
 			},
 			func(rtp rtp.Packet) {
 				proxy.broadcastVideoWriteRTP(rtp)
@@ -299,10 +299,10 @@ func (proxy *WebRTCProxy) connectGo2(robotIP, token, ncode string) error {
 		return fmt.Errorf("connect Go2 失败: %v", err)
 	}
 
-	log.Printf("connect Go2 成功: %s", ncode)
+	log.Printf("connect Go2 成功: %s", ucode)
 
 	// 存储连接
-	proxy.connections[ncode] = conn
+	proxy.connections[ucode] = conn
 	return nil
 }
 
@@ -313,7 +313,7 @@ func (proxy *WebRTCProxy) handleConnect(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "无效的请求格式", http.StatusBadRequest)
 		return
 	}
-	err := proxy.connectGo2(req.RobotIP, req.Token, req.NCode)
+	err := proxy.connectGo2(req.RobotIP, req.Token, req.UCode)
 	if err != nil {
 		http.Error(w, "连接机器人失败", http.StatusInternalServerError)
 		return
@@ -323,7 +323,7 @@ func (proxy *WebRTCProxy) handleConnect(w http.ResponseWriter, r *http.Request) 
 		Success: true,
 		Message: "连接成功",
 		Data: map[string]string{
-			"NCode": req.NCode,
+			"UCode": req.UCode,
 		},
 	})
 }
@@ -381,23 +381,23 @@ func (proxy *WebRTCProxy) broadcastVideoWriteRTP(rtp rtp.Packet) {
 // handleWebRTCClient 处理WebRTC客户端连接
 func (proxy *WebRTCProxy) handleWebRTCClient(w http.ResponseWriter, r *http.Request) {
 	// 获取机器人连接ID TODO
-	ncode := r.URL.Query().Get("ncode")
-	log.Printf("收到WebRTC客户端请求: ncode=%s", ncode)
-	ncode = proxy.config.GetDefaultNCode(ncode)
+	ucode := r.URL.Query().Get("ucode")
+	log.Printf("收到WebRTC客户端请求: ucode=%s", ucode)
+	ucode = proxy.config.GetDefaultUCode(ucode)
 	clientID := proxy.generateClientID()
-	log.Printf("生成连接ID: %s, 客户端ID: %s", ncode, clientID)
+	log.Printf("生成连接ID: %s, 客户端ID: %s", ucode, clientID)
 
 	proxy.mutex.RLock()
-	robotConn, exists := proxy.connections[ncode]
+	robotConn, exists := proxy.connections[ucode]
 	proxy.mutex.RUnlock()
 
 	if !exists {
-		log.Printf("Go2连接不存在: %s", ncode)
+		log.Printf("Go2连接不存在: %s", ucode)
 		http.Error(w, "Go2连接不存在", http.StatusNotFound)
 		return
 	}
 
-	log.Printf("找到Go2连接: %s", ncode)
+	log.Printf("找到Go2连接: %s", ucode)
 
 	// 创建WebRTC客户端
 	client := NewWebRTCClient(clientID, robotConn, proxy.config)
@@ -518,14 +518,14 @@ func (proxy *WebRTCProxy) handleDisconnect(w http.ResponseWriter, r *http.Reques
 	}
 
 	// 使用配置中的默认机器人IP
-	ncode := proxy.config.GetDefaultNCode("")
+	ucode := proxy.config.GetDefaultUCode("")
 
 	proxy.mutex.Lock()
 	defer proxy.mutex.Unlock()
 
-	if conn, exists := proxy.connections[ncode]; exists {
+	if conn, exists := proxy.connections[ucode]; exists {
 		conn.Close()
-		delete(proxy.connections, ncode)
+		delete(proxy.connections, ucode)
 
 		// 关闭所有相关的WebRTC客户端
 		for clientID, client := range proxy.clients {
@@ -554,8 +554,8 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "无效的请求格式", http.StatusBadRequest)
 		return
 	}
-	ncode := proxy.config.GetDefaultNCode(req.NCode)
-	log.Printf("收到命令请求: %v, ncode=%s", req, ncode)
+	ucode := proxy.config.GetDefaultUCode(req.UCode)
+	log.Printf("收到命令请求: %v, ucode=%s", req, ucode)
 	if req.Command == "Shoot" {
 		// 根据运行模式处理射击命令
 		if proxy.config.IsRealMode() {
@@ -570,7 +570,7 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 	} else {
 		// 使用配置中的默认机器人IP
 		proxy.mutex.RLock()
-		conn, exists := proxy.connections[ncode]
+		conn, exists := proxy.connections[ucode]
 		proxy.mutex.RUnlock()
 
 		if !exists {

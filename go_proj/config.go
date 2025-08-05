@@ -22,7 +22,7 @@ const (
 type Config struct {
 	DefaultRobotIP string `json:"default_robot_ip"`
 	DefaultToken   string `json:"default_token"`
-	DefaultNCode   string `json:"default_ncode"`
+	DefaultUCode   string `json:"default_ucode"`
 
 	// 运行模式
 	RunMode RunMode `json:"run_mode"`
@@ -63,7 +63,7 @@ func DefaultConfig() *Config {
 	return &Config{
 		DefaultRobotIP: "192.168.123.161", // 默认机器人IP
 		DefaultToken:   "",                // 默认Token
-		DefaultNCode:   "Go2_001",         // 默认NCode
+		DefaultUCode:   "Go2_001",         // 默认UCode
 		RunMode:        RunModeReal,       // 默认真实模式
 		WebRTC: struct {
 			ICEServers        []string `json:"ice_servers"`
@@ -189,12 +189,12 @@ func (c *Config) IsRealMode() bool {
 	return c.RunMode == RunModeReal
 }
 
-// GetDefaultNCode 获取默认NCode
-func (c *Config) GetDefaultNCode(ncode string) string {
-	if ncode != "" {
-		return ncode
+// GetDefaultUCode 获取默认UCode
+func (c *Config) GetDefaultUCode(ucode string) string {
+	if ucode != "" {
+		return ucode
 	}
-	return c.DefaultNCode
+	return c.DefaultUCode
 }
 
 // GetRobotIP 获取机器人IP，如果为空则使用默认IP
