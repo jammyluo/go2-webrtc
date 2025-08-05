@@ -13,22 +13,31 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v3"
+	"github.com/pion/webrtc/v3/pkg/media"
 )
+
+type RobotConn interface {
+	Connect(ip string, token string) error
+	Close() error
+	SendCommand(command string, data interface{})
+}
 
 // WebRTCProxy WebRTC代理服务器
 type WebRTCProxy struct {
-	connections map[string]*Go2Connection
+	connections map[string]RobotConn
 	clients     map[string]*WebRTCClient
 	mutex       sync.RWMutex
+	config      *Config
 }
 
 // WebRTCClient WebRTC客户端结构
 type WebRTCClient struct {
-	id             string
-	peerConnection *webrtc.PeerConnection
-	videoTrack     *webrtc.TrackLocalStaticRTP
-	robotConn      *Go2Connection
-	onClose        func()
+	id               string
+	peerConnection   *webrtc.PeerConnection
+	videoTrackRTP    *webrtc.TrackLocalStaticRTP
+	videoTrackSample *webrtc.TrackLocalStaticSample
+	robotConn        RobotConn
+	onClose          func()
 }
 
 // ProxyRequest 代理请求结构
@@ -36,6 +45,7 @@ type ProxyRequest struct {
 	Action   string      `json:"action"`
 	RobotIP  string      `json:"robot_ip"`
 	Token    string      `json:"token"`
+	NCode    string      `json:"ncode"`
 	Command  string      `json:"command,omitempty"`
 	Data     interface{} `json:"data,omitempty"`
 	ClientID string      `json:"client_id,omitempty"`
@@ -49,16 +59,12 @@ type ProxyResponse struct {
 }
 
 // NewWebRTCProxy 创建新的WebRTC代理
-func NewWebRTCProxy() *WebRTCProxy {
+func NewWebRTCProxy(config *Config) *WebRTCProxy {
 	return &WebRTCProxy{
-		connections: make(map[string]*Go2Connection),
+		connections: make(map[string]RobotConn),
 		clients:     make(map[string]*WebRTCClient),
+		config:      config,
 	}
-}
-
-// generateConnectionID 生成连接ID
-func (proxy *WebRTCProxy) generateConnectionID(robotIP, token string) string {
-	return fmt.Sprintf("%s_%s", robotIP, token)
 }
 
 // generateClientID 生成客户端ID
@@ -67,14 +73,10 @@ func (proxy *WebRTCProxy) generateClientID() string {
 }
 
 // NewWebRTCClient 创建新的WebRTC客户端
-func NewWebRTCClient(id string, robotConn *Go2Connection) *WebRTCClient {
+func NewWebRTCClient(id string, robotConn RobotConn, webrtcConfig *Config) *WebRTCClient {
 	config := webrtc.Configuration{
-		// 强制使用本地连接
-		ICEServers: []webrtc.ICEServer{
-			{
-				URLs: []string{"stun:stun.l.google.com:19302"},
-			},
-		},
+		// 使用配置中的ICE服务器
+		ICEServers: webrtcConfig.GetICEServers(),
 		// 强制使用所有ICE传输策略
 		ICETransportPolicy: webrtc.ICETransportPolicyAll,
 		BundlePolicy:       webrtc.BundlePolicyMaxBundle,
@@ -165,25 +167,40 @@ func NewWebRTCClient(id string, robotConn *Go2Connection) *WebRTCClient {
 	return client
 }
 
-// AddVideoTrack 添加视频轨道到WebRTC客户端
-func (client *WebRTCClient) AddVideoTrack() error {
-	// 使用标准H.264编码，但配置更宽松
-	videoTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "pion")
+func (client *WebRTCClient) AddVideoTrackStaticSample() error {
+	videoTrack, err := webrtc.NewTrackLocalStaticSample(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "pion")
 	if err != nil {
-		log.Printf("❌ 创建H.264视频轨道失败: %v", err)
+		log.Printf("AddVideoTrackStaticSample 创建H.264视频轨道失败: %v", err)
 		return fmt.Errorf("创建H.264视频轨道失败: %v", err)
 	}
-
-	client.videoTrack = videoTrack
-
+	client.videoTrackSample = videoTrack
 	// 添加轨道到PeerConnection
-	_, err = client.peerConnection.AddTrack(videoTrack)
+	_, err = client.peerConnection.AddTrack(client.videoTrackSample)
 	if err != nil {
-		log.Printf("❌ 添加H.264视频轨道失败: %v", err)
+		log.Printf("AddVideoTrackStaticSample 添加H.264视频轨道失败: %v", err)
 		return fmt.Errorf("添加H.264视频轨道失败: %v", err)
 	}
 
-	log.Printf("✅ WebRTC客户端 %s H.264视频轨道已添加", client.id)
+	log.Printf("AddVideoTrackStaticSample WebRTC客户端 %s H.264视频轨道已添加", client.id)
+	return nil
+}
+
+// AddVideoTrack 添加视频轨道到WebRTC客户端
+func (client *WebRTCClient) AddVideoTrackStaticRTP() error {
+	videoTrack, err := webrtc.NewTrackLocalStaticRTP(webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeH264}, "video", "pion")
+	if err != nil {
+		log.Printf("AddVideoTrackStaticRTP 创建H.264视频轨道失败: %v", err)
+		return fmt.Errorf("创建H.264视频轨道失败: %v", err)
+	}
+	client.videoTrackRTP = videoTrack
+	// 添加轨道到PeerConnection
+	_, err = client.peerConnection.AddTrack(client.videoTrackRTP)
+	if err != nil {
+		log.Printf("AddVideoTrackStaticRTP 添加H.264视频轨道失败: %v", err)
+		return fmt.Errorf("添加H.264视频轨道失败: %v", err)
+	}
+
+	log.Printf("AddVideoTrackStaticRTP WebRTC客户端 %s H.264视频轨道已添加", client.id)
 	return nil
 }
 
@@ -227,6 +244,68 @@ func (client *WebRTCClient) Close() error {
 	return nil
 }
 
+func (proxy *WebRTCProxy) connectGo2(robotIP, token, ncode string) error {
+	// 使用配置中的默认机器人IP
+	robotIP = proxy.config.GetRobotIP(robotIP)
+	token = proxy.config.GetDefaultToken(token)
+	ncode = proxy.config.GetDefaultNCode(ncode)
+
+	proxy.mutex.Lock()
+	defer proxy.mutex.Unlock()
+
+	// 检查是否已存在连接
+	if _, exists := proxy.connections[ncode]; exists {
+		log.Printf("connect Go2 失败: %s", ncode)
+		return nil
+	}
+
+	var conn RobotConn
+	if proxy.config.RunMode == "mock" {
+		conn = NewMockConn(
+			func() {
+				log.Printf("PROXY 机器人验证成功: %s", ncode)
+			},
+			func(message interface{}, msgObj interface{}) {
+				log.Printf("PROXY 收到消息: %v", message)
+			},
+			func() {
+				log.Printf("PROXY 数据通道已打开: %s", ncode)
+			},
+			func(sample media.Sample) error {
+				return proxy.broadcastVideoWriteSample(sample)
+			},
+		)
+	} else {
+		// 创建新的机器人连接
+		conn = NewGo2Connection(
+			func() {
+				log.Printf("PROXY 机器人验证成功: %s", ncode)
+			},
+			func(message interface{}, msgObj interface{}) {
+				log.Printf("PROXY 收到消息: %v", message)
+			},
+			func() {
+				log.Printf("PROXY 数据通道已打开: %s", ncode)
+			},
+			func(rtp rtp.Packet) {
+				proxy.broadcastVideoWriteRTP(rtp)
+			},
+		)
+	}
+
+	// 连接到机器人
+	log.Printf("connect Go2: %s, %s, %s", proxy.config.RunMode, robotIP, token)
+	if err := conn.Connect(robotIP, token); err != nil {
+		return fmt.Errorf("connect Go2 失败: %v", err)
+	}
+
+	log.Printf("connect Go2 成功: %s", ncode)
+
+	// 存储连接
+	proxy.connections[ncode] = conn
+	return nil
+}
+
 // handleConnect 处理连接请求
 func (proxy *WebRTCProxy) handleConnect(w http.ResponseWriter, r *http.Request) {
 	var req ProxyRequest
@@ -234,67 +313,47 @@ func (proxy *WebRTCProxy) handleConnect(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "无效的请求格式", http.StatusBadRequest)
 		return
 	}
-
-	connectionID := proxy.generateConnectionID(req.RobotIP, req.Token)
-
-	proxy.mutex.Lock()
-	defer proxy.mutex.Unlock()
-
-	// 检查是否已存在连接
-	if _, exists := proxy.connections[connectionID]; exists {
-		json.NewEncoder(w).Encode(ProxyResponse{
-			Success: true,
-			Message: "连接已存在",
-		})
+	err := proxy.connectGo2(req.RobotIP, req.Token, req.NCode)
+	if err != nil {
+		http.Error(w, "连接机器人失败", http.StatusInternalServerError)
 		return
 	}
-
-	// 创建新的机器人连接
-	conn := NewGo2Connection(
-		req.RobotIP,
-		// req.Token,
-		"",
-		func() {
-			log.Printf("PROXY 机器人验证成功: %s", connectionID)
-			// 自动开启视频流
-			proxy.connections[connectionID].OpenVideo()
-			log.Printf("PROXY 机器人连接成功，视频流已自动开启: %s", connectionID)
-		},
-		func(message interface{}, msgObj interface{}) {
-			log.Printf("PROXY 收到消息: %v", message)
-		},
-		func() {
-			log.Printf("PROXY 数据通道已打开: %s", connectionID)
-		},
-	)
-
-	// 设置视频帧回调，转发给所有WebRTC客户端
-	conn.SetVideoFrameCallback(func(rtp rtp.Packet) {
-		proxy.broadcastVideoFrame(connectionID, rtp)
-	})
-
-	// 连接到机器人
-	if err := conn.ConnectRobot(); err != nil {
-		http.Error(w, fmt.Sprintf("连接机器人失败: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	log.Printf("机器人连接成功: %s", connectionID)
-
-	// 存储连接
-	proxy.connections[connectionID] = conn
 
 	json.NewEncoder(w).Encode(ProxyResponse{
 		Success: true,
 		Message: "连接成功",
 		Data: map[string]string{
-			"connection_id": connectionID,
+			"NCode": req.NCode,
 		},
 	})
 }
 
+func (proxy *WebRTCProxy) broadcastVideoWriteSample(sample media.Sample) error {
+	proxy.mutex.RLock()
+	defer proxy.mutex.RUnlock()
+	// 统计成功发送的客户端数量
+	successCount := 0
+	totalCount := 0
+
+	// 向所有WebRTC客户端发送视频帧
+	for clientID, client := range proxy.clients {
+		if client.robotConn != nil && client.videoTrackSample != nil {
+			totalCount++
+
+			// 写入RTP包
+			err := client.videoTrackSample.WriteSample(sample)
+			if err != nil {
+				log.Printf("❌ 客户端 %s 写入视频帧失败: %v", clientID, err)
+			} else {
+				successCount++
+			}
+		}
+	}
+	return nil
+}
+
 // broadcastVideoFrame 广播视频帧给所有WebRTC客户端
-func (proxy *WebRTCProxy) broadcastVideoFrame(connectionID string, rtp rtp.Packet) {
+func (proxy *WebRTCProxy) broadcastVideoWriteRTP(rtp rtp.Packet) {
 	proxy.mutex.RLock()
 	defer proxy.mutex.RUnlock()
 
@@ -304,11 +363,11 @@ func (proxy *WebRTCProxy) broadcastVideoFrame(connectionID string, rtp rtp.Packe
 
 	// 向所有WebRTC客户端发送视频帧
 	for clientID, client := range proxy.clients {
-		if client.robotConn != nil && client.videoTrack != nil {
+		if client.robotConn != nil && client.videoTrackRTP != nil {
 			totalCount++
 
 			// 写入RTP包
-			err := client.videoTrack.WriteRTP(&rtp)
+			err := client.videoTrackRTP.WriteRTP(&rtp)
 			if err != nil {
 				log.Printf("❌ 客户端 %s 写入视频帧失败: %v", clientID, err)
 			} else {
@@ -316,39 +375,32 @@ func (proxy *WebRTCProxy) broadcastVideoFrame(connectionID string, rtp rtp.Packe
 			}
 		}
 	}
+	// log.Printf("🎬 成功发送视频帧: %d/%d", successCount, totalCount)
 }
 
 // handleWebRTCClient 处理WebRTC客户端连接
 func (proxy *WebRTCProxy) handleWebRTCClient(w http.ResponseWriter, r *http.Request) {
-	// 获取机器人连接ID
-	robotIP := r.URL.Query().Get("robot_ip")
-	token := r.URL.Query().Get("token")
-	log.Printf("收到WebRTC客户端请求: robot_ip=%s, token=%s", robotIP, token)
-
-	if robotIP == "" {
-		log.Printf("缺少参数: robot_ip=%s, token=%s", robotIP, token)
-		http.Error(w, "缺少robot_ip或token参数", http.StatusBadRequest)
-		return
-	}
-
-	connectionID := proxy.generateConnectionID(robotIP, token)
+	// 获取机器人连接ID TODO
+	ncode := r.URL.Query().Get("ncode")
+	log.Printf("收到WebRTC客户端请求: ncode=%s", ncode)
+	ncode = proxy.config.GetDefaultNCode(ncode)
 	clientID := proxy.generateClientID()
-	log.Printf("生成连接ID: %s, 客户端ID: %s", connectionID, clientID)
+	log.Printf("生成连接ID: %s, 客户端ID: %s", ncode, clientID)
 
 	proxy.mutex.RLock()
-	robotConn, exists := proxy.connections[connectionID]
+	robotConn, exists := proxy.connections[ncode]
 	proxy.mutex.RUnlock()
 
 	if !exists {
-		log.Printf("机器人连接不存在: %s", connectionID)
-		http.Error(w, "机器人连接不存在", http.StatusNotFound)
+		log.Printf("Go2连接不存在: %s", ncode)
+		http.Error(w, "Go2连接不存在", http.StatusNotFound)
 		return
 	}
 
-	log.Printf("找到机器人连接: %s", connectionID)
+	log.Printf("找到Go2连接: %s", ncode)
 
 	// 创建WebRTC客户端
-	client := NewWebRTCClient(clientID, robotConn)
+	client := NewWebRTCClient(clientID, robotConn, proxy.config)
 	if client == nil {
 		log.Printf("创建WebRTC客户端失败: %s", clientID)
 		http.Error(w, "创建WebRTC客户端失败", http.StatusInternalServerError)
@@ -357,12 +409,22 @@ func (proxy *WebRTCProxy) handleWebRTCClient(w http.ResponseWriter, r *http.Requ
 
 	log.Printf("WebRTC客户端创建成功: %s", clientID)
 
-	// 添加视频轨道
-	if err := client.AddVideoTrack(); err != nil {
-		log.Printf("添加视频轨道失败: %v", err)
-		client.Close()
-		http.Error(w, "添加视频轨道失败", http.StatusInternalServerError)
-		return
+	if proxy.config.RunMode == "mock" {
+		// 添加视频轨道
+		if err := client.AddVideoTrackStaticSample(); err != nil {
+			log.Printf("添加视频轨道失败: %v", err)
+			client.Close()
+			http.Error(w, "添加视频轨道失败", http.StatusInternalServerError)
+			return
+		}
+	} else {
+		// 添加视频轨道
+		if err := client.AddVideoTrackStaticRTP(); err != nil {
+			log.Printf("添加视频轨道失败: %v", err)
+			client.Close()
+			http.Error(w, "添加视频轨道失败", http.StatusInternalServerError)
+			return
+		}
 	}
 
 	log.Printf("视频轨道添加成功: %s", clientID)
@@ -455,14 +517,15 @@ func (proxy *WebRTCProxy) handleDisconnect(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	connectionID := proxy.generateConnectionID(req.RobotIP, req.Token)
+	// 使用配置中的默认机器人IP
+	ncode := proxy.config.GetDefaultNCode("")
 
 	proxy.mutex.Lock()
 	defer proxy.mutex.Unlock()
 
-	if conn, exists := proxy.connections[connectionID]; exists {
+	if conn, exists := proxy.connections[ncode]; exists {
 		conn.Close()
-		delete(proxy.connections, connectionID)
+		delete(proxy.connections, ncode)
 
 		// 关闭所有相关的WebRTC客户端
 		for clientID, client := range proxy.clients {
@@ -491,16 +554,23 @@ func (proxy *WebRTCProxy) handleCommand(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "无效的请求格式", http.StatusBadRequest)
 		return
 	}
-	log.Printf("收到命令请求: %v", req)
+	ncode := proxy.config.GetDefaultNCode(req.NCode)
+	log.Printf("收到命令请求: %v, ncode=%s", req, ncode)
 	if req.Command == "Shoot" {
-		// 创建GPIO控制器并演示高低电平控制
-		gpioCtrl := gpio.NewGPIOController(27)
-		gpioCtrl.Pulse(time.Millisecond * time.Duration(70))
-		log.Printf("Shoot 命令已发送")
+		// 根据运行模式处理射击命令
+		if proxy.config.IsRealMode() {
+			// 真实模式：使用GPIO控制
+			gpioCtrl := gpio.NewGPIOController(proxy.config.GPIO.ShootPin)
+			gpioCtrl.Pulse(time.Millisecond * time.Duration(proxy.config.GPIO.PulseDuration))
+			log.Printf("Shoot 命令已发送 (真实模式)")
+		} else {
+			// 模拟模式：仅记录日志
+			log.Printf("Shoot 命令已发送 (模拟模式)")
+		}
 	} else {
-		connectionID := proxy.generateConnectionID(req.RobotIP, req.Token)
+		// 使用配置中的默认机器人IP
 		proxy.mutex.RLock()
-		conn, exists := proxy.connections[connectionID]
+		conn, exists := proxy.connections[ncode]
 		proxy.mutex.RUnlock()
 
 		if !exists {
@@ -541,7 +611,7 @@ func (proxy *WebRTCProxy) cleanupDisconnectedClients() {
 }
 
 // Start 启动代理服务器
-func (proxy *WebRTCProxy) Start(port string) {
+func (proxy *WebRTCProxy) Start() {
 	router := mux.NewRouter()
 
 	// HTTP API路由
@@ -554,7 +624,7 @@ func (proxy *WebRTCProxy) Start(port string) {
 	router.HandleFunc("/webrtc/answer", proxy.handleWebRTCAnswer).Methods("POST")
 
 	// 静态文件服务
-	router.PathPrefix("/").Handler(http.FileServer(http.Dir("static")))
+	router.PathPrefix("/").Handler(http.FileServer(http.Dir(proxy.config.Server.StaticDir)))
 
 	// 启动定期清理任务
 	go func() {
@@ -565,11 +635,18 @@ func (proxy *WebRTCProxy) Start(port string) {
 		}
 	}()
 
-	log.Printf("WebRTC代理服务器启动在端口 %s", port)
-	log.Fatal(http.ListenAndServe(":"+port, router))
+	log.Printf("WebRTC代理服务器启动在端口 %s", proxy.config.Server.Port)
+	log.Fatal(http.ListenAndServe(":"+proxy.config.Server.Port, router))
 }
 
 func main() {
-	proxy := NewWebRTCProxy()
-	proxy.Start("8080")
+	// 加载配置
+	config, err := LoadConfig("config.json")
+	if err != nil {
+		log.Fatalf("加载配置失败: %v", err)
+	}
+
+	// 创建WebRTC代理
+	proxy := NewWebRTCProxy(config)
+	proxy.Start()
 }

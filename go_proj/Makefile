@@ -26,6 +26,20 @@ dev: build
 	@echo "访问 http://localhost:8080 查看控制面板"
 	./webrtc-proxy
 
+# 模拟模式运行
+mock: build
+	@echo "启动WebRTC代理服务器（模拟模式）..."
+	@echo "访问 http://localhost:8080 查看控制面板"
+	cp config.mock.json config.json
+	./webrtc-proxy
+
+# 真实模式运行
+real: build
+	@echo "启动WebRTC代理服务器（真实模式）..."
+	@echo "访问 http://localhost:8080 查看控制面板"
+	cp config.real.json config.json
+	./webrtc-proxy
+
 # 清理构建文件
 clean:
 	rm -f webrtc-proxy
@@ -53,6 +67,8 @@ help:
 	@echo "  build        - 构建代理服务器"
 	@echo "  run          - 构建并运行代理服务器"
 	@echo "  dev          - 开发模式运行"
+	@echo "  mock         - 模拟模式运行"
+	@echo "  real         - 真实模式运行"
 	@echo "  clean        - 清理构建文件"
 	@echo "  test         - 运行测试"
 	@echo "  fmt          - 格式化代码"

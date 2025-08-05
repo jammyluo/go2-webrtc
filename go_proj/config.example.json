@@ -1,0 +1,20 @@
+{
+  "default_robot_ip": "192.168.1.100",
+  "run_mode": "real",
+  "webrtc": {
+    "ice_servers": [
+      "stun:stun.l.google.com:19302",
+      "stun:stun1.l.google.com:19302"
+    ],
+    "video_codec": "H264",
+    "connection_timeout": 30
+  },
+  "server": {
+    "port": "8080",
+    "static_dir": "static"
+  },
+  "gpio": {
+    "shoot_pin": 27,
+    "pulse_duration": 70
+  }
+} 

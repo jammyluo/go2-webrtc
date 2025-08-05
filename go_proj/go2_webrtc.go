@@ -71,19 +71,19 @@ var SportCmd = map[string]int{
 
 // Go2Connection 机器人连接结构体
 type Go2Connection struct {
-	ip               string
-	token            string
+	ip           string
+	token        string
+	onValidated  func()
+	onMessage    func(message interface{}, msgObj interface{})
+	onOpen       func()
+	onVideoFrame func(rtp.Packet)
+
 	peerConnection   *webrtc.PeerConnection
 	dataChannel      *webrtc.DataChannel
 	validationResult string
-	onValidated      func()
-	onMessage        func(message interface{}, msgObj interface{})
-	onOpen           func()
 	validationKey    string // 保存验证密钥
-
 	// 视频处理相关
-	videoTrack   *webrtc.TrackRemote
-	onVideoFrame func(rtp.Packet) // 视频帧回调
+	videoTrack *webrtc.TrackRemote
 }
 
 // Message 消息结构体
@@ -109,28 +109,27 @@ type MoveCommand struct {
 }
 
 // NewGo2Connection 创建新的Go2连接
-func NewGo2Connection(ip, token string, onValidated func(), onMessage func(message interface{}, msgObj interface{}), onOpen func()) *Go2Connection {
-	config := webrtc.Configuration{
-		// ICEServers: []webrtc.ICEServer{
-		// 	{
-		// 		URLs: []string{"stun:stun.l.google.com:19302"},
-		// 	},
-		// },
-	}
+func NewGo2Connection(onValidated func(), onMessage func(message interface{}, msgObj interface{}), onOpen func(), onVideoFrame func(rtp.Packet)) *Go2Connection {
+	config := webrtc.Configuration{}
 
 	peerConnection, err := webrtc.NewPeerConnection(config)
 	if err != nil {
 		log.Fatal("创建PeerConnection失败:", err)
 	}
 
+	if onVideoFrame != nil {
+		log.Printf("🎬 视频帧回调已设置")
+	} else {
+		log.Printf("🎬 视频帧回调未设置")
+	}
+
 	conn := &Go2Connection{
-		ip:               ip,
-		token:            token,
 		peerConnection:   peerConnection,
 		validationResult: "PENDING",
 		onValidated:      onValidated,
 		onMessage:        onMessage,
 		onOpen:           onOpen,
+		onVideoFrame:     onVideoFrame,
 	}
 
 	// 创建数据通道
@@ -214,12 +213,6 @@ func (conn *Go2Connection) processVideoTrack(track *webrtc.TrackRemote) {
 	log.Printf("🎬 视频轨道处理结束")
 }
 
-// SetVideoFrameCallback 设置视频帧回调函数
-func (conn *Go2Connection) SetVideoFrameCallback(callback func(rtp.Packet)) {
-	conn.onVideoFrame = callback
-	log.Printf("🎬 视频帧回调已设置")
-}
-
 // handleDataChannelMessage 处理数据通道消息
 func (conn *Go2Connection) handleDataChannelMessage(msg webrtc.DataChannelMessage) {
 	if msg.IsString {
@@ -267,6 +260,9 @@ func (conn *Go2Connection) validate(message Message) {
 	log.Printf("验证消息: %v", message)
 	if data, ok := message.Data.(string); ok && data == "Validation Ok." {
 		conn.validationResult = "SUCCESS"
+		// 自动开启视频流
+		conn.openVideo()
+		log.Printf("视频流已自动开启")
 		if conn.onValidated != nil {
 			conn.onValidated()
 		}
@@ -514,12 +510,12 @@ func makeLocalRequest(path string, body io.Reader, headers map[string]string) (*
 }
 
 // getPeerAnswer 获取对等方应答
-func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription, ip, token string) (map[string]interface{}, error) {
+func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription) (map[string]interface{}, error) {
 	sdpOfferJSON := SDPOffer{
 		ID:    "STA_localNetwork",
 		SDP:   sdpOffer.SDP,
 		Type:  sdpOffer.Type.String(),
-		Token: token,
+		Token: conn.token,
 	}
 
 	newSDP, err := json.Marshal(sdpOfferJSON)
@@ -527,7 +523,7 @@ func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription, ip
 		return nil, err
 	}
 
-	url := fmt.Sprintf("http://%s:9991/con_notify", ip)
+	url := fmt.Sprintf("http://%s:9991/con_notify", conn.ip)
 	resp, err := makeLocalRequest(url, nil, nil)
 	if err != nil {
 		return nil, err
@@ -588,7 +584,7 @@ func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription, ip
 	}
 
 	// 第二个请求的URL
-	url2 := fmt.Sprintf("http://%s:9991/con_ing_%s", ip, pathEnding)
+	url2 := fmt.Sprintf("http://%s:9991/con_ing_%s", conn.ip, pathEnding)
 
 	headers := map[string]string{
 		"Content-Type": "application/x-www-form-urlencoded",
@@ -626,8 +622,11 @@ func (conn *Go2Connection) getPeerAnswer(sdpOffer *webrtc.SessionDescription, ip
 	return peerAnswer, nil
 }
 
-// ConnectRobot 连接到机器人
-func (conn *Go2Connection) ConnectRobot() error {
+// Connect 连接到机器人
+func (conn *Go2Connection) Connect(ip, token string) error {
+	conn.ip = ip
+	conn.token = token
+
 	// 创建提议
 	offer, err := conn.peerConnection.CreateOffer(nil)
 	if err != nil {
@@ -641,10 +640,10 @@ func (conn *Go2Connection) ConnectRobot() error {
 	}
 
 	sdp_offer := conn.peerConnection.LocalDescription()
-	log.Printf("ConnectRobot I sdp_offer: %v", sdp_offer)
+	log.Printf("Connect I sdp_offer: %v", sdp_offer)
 
 	// 获取对等方应答
-	peerAnswer, err := conn.getPeerAnswer(sdp_offer, conn.ip, conn.token)
+	peerAnswer, err := conn.getPeerAnswer(sdp_offer)
 	if err != nil {
 		return fmt.Errorf("获取对等方应答失败: %v", err)
 	}
@@ -676,13 +675,13 @@ func generate_id() int {
 }
 
 // OpenVideo 开启视频
-func (conn *Go2Connection) OpenVideo() {
+func (conn *Go2Connection) openVideo() {
 	conn.publish("", "on", VideoType)
 	log.Printf("🎬 视频开启命令已发送")
 }
 
 // CloseVideo 关闭视频
-func (conn *Go2Connection) CloseVideo() {
+func (conn *Go2Connection) closeVideo() {
 	conn.publish("", "off", VideoType)
 	log.Printf("🎬 视频关闭命令已发送")
 }
